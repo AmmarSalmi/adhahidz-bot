@@ -15,7 +15,12 @@ BOT_COMMANDS = [
     ("change", "Change your subscribed wilaya"),
     ("status", "Check your current subscription status"),
     ("stop", "Unsubscribe from notifications"),
-    ("register", "Start the adhahi.dz forced registration flow"),
+    ("register", "Manual adhahi.dz registration flow"),
+    ("addprofile", "Add an auto-registration profile"),
+    ("profiles", "List your registration profiles"),
+    ("editprofile", "Edit a registration profile"),
+    ("deleteprofile", "Delete a registration profile"),
+    ("reorder", "Change profile priority order"),
     ("help", "Show all available commands"),
 ]
 

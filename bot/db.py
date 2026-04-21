@@ -60,6 +60,9 @@ async def init_db(db_path: str) -> None:
         await db.execute("PRAGMA synchronous=NORMAL;")
         await db.execute("PRAGMA busy_timeout=3000;")
         await db.execute(CREATE_TABLE_SQL)
+        # Also create the profiles table (for auto-registration)
+        from .profile_db import CREATE_PROFILES_TABLE_SQL
+        await db.execute(CREATE_PROFILES_TABLE_SQL)
         await db.commit()
 
 

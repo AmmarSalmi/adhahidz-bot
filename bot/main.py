@@ -8,8 +8,19 @@ from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler
 
 from .api_client import QuotaApiClient
+from .auto_registration import build_auto_registration_handler
 from .db import init_db
 from .handlers import BOT_COMMANDS, change, help_command, on_wilaya_selected, start, status, stop
+from .profile_handlers import (
+    build_addprofile_handler,
+    build_editprofile_handler,
+    build_reorder_handler,
+    deleteprofile,
+    editprofile,
+    list_profiles,
+    on_delete_profile,
+    on_edit_profile_select,
+)
 from .registration import build_registration_handler
 from .scheduler import start_scheduler
 
@@ -109,15 +120,27 @@ def main() -> None:
         .build()
     )
 
-    # Registration conversation handler (must be added first for priority)
+    # Conversation handlers (must be added first for priority)
     app.add_handler(build_registration_handler())
+    app.add_handler(build_addprofile_handler())
+    app.add_handler(build_auto_registration_handler())
+    app.add_handler(build_editprofile_handler())
+    app.add_handler(build_reorder_handler())
 
+    # Simple command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("change", change))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("profiles", list_profiles))
+    app.add_handler(CommandHandler("deleteprofile", deleteprofile))
+    app.add_handler(CommandHandler("editprofile", editprofile))
+
+    # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))
+    app.add_handler(CallbackQueryHandler(on_delete_profile, pattern=r"^del_prof:"))
+    app.add_handler(CallbackQueryHandler(on_edit_profile_select, pattern=r"^edit_prof:"))
 
     app.run_polling(allowed_updates=["message", "callback_query"])
 

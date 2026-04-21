@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from . import db as db_mod
+from . import profile_db
 from .api_client import QuotaApiClient, QuotaStatus
+from .auto_registration import notify_profile_owners
 from .notifier import notify_users
 
 logger = logging.getLogger(__name__)
@@ -108,6 +110,21 @@ async def _poll_once(
                 msg = f"✅ Quota available in {status.wilaya_name}! Remaining: {remaining_txt} units."
                 await notify_users(app.bot, to_notify, msg)
                 await db_mod.mark_notified(db_path, to_notify, wilaya_code)
+
+                # Auto-registration: trigger for pending profiles
+                try:
+                    pending_profiles = await profile_db.get_pending_profiles_for_wilaya(
+                        db_path, wilaya_code
+                    )
+                    if pending_profiles:
+                        logger.info(
+                            "Found %d pending profiles for wilaya %s — triggering auto-registration",
+                            len(pending_profiles),
+                            wilaya_code,
+                        )
+                        await notify_profile_owners(app, pending_profiles)
+                except Exception:
+                    logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
             else:
                 # Notify users that the quota they were alerted about is now gone.
                 previously_notified = await db_mod.get_notified_subscribers(db_path, wilaya_code)
@@ -145,6 +162,12 @@ def start_scheduler(
             confirm_delay_s=confirm_delay_s,
         )
 
-    scheduler.add_job(job_wrapper, "interval", seconds=interval_s, max_instances=1)
+    scheduler.add_job(
+        job_wrapper,
+        "interval",
+        seconds=interval_s,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
     scheduler.start()
     return scheduler
