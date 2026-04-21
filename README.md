@@ -20,6 +20,11 @@ cp .env.example .env
 - `TELEGRAM_BOT_TOKEN`
 - `QUOTA_API_BASE_URL` (default is `https://adhahi.dz`)
 
+Optional tuning:
+- `CHECK_INTERVAL_SECONDS`: how often to poll the API (default `300`)
+- `CONFIRM_FETCHES`: when `available=true` is detected, re-fetch this many extra times before notifying (default `2`)
+- `CONFIRM_DELAY_SECONDS`: delay between confirmation re-fetches in seconds (default `1`)
+
 ### Run
 
 ```bash

@@ -137,6 +137,18 @@ async def get_subscribers_to_notify(db_path: str, wilaya_code: str) -> list[int]
             return [int(r[0]) for r in rows]
 
 
+async def get_notified_subscribers(db_path: str, wilaya_code: str) -> list[int]:
+    """Return user_ids that have already been notified (notified=1) for *wilaya_code*."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT user_id FROM subscriptions WHERE Wilaya_code=? AND notified=1",
+            (wilaya_code,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [int(r[0]) for r in rows]
+
+
 async def mark_notified(db_path: str, user_ids: list[int], wilaya_code: str) -> None:
     if not user_ids:
         return
