@@ -9,6 +9,16 @@ from telegram.ext import ContextTypes
 from . import db as db_mod
 from .api_client import QuotaStatus
 
+# Canonical list of bot commands — used by the /help handler and set_my_commands.
+BOT_COMMANDS = [
+    ("start", "Subscribe to wilaya quota notifications"),
+    ("change", "Change your subscribed wilaya"),
+    ("status", "Check your current subscription status"),
+    ("stop", "Unsubscribe from notifications"),
+    ("register", "Start the adhahi.dz forced registration flow"),
+    ("help", "Show all available commands"),
+]
+
 logger = logging.getLogger(__name__)
 
 _WILAYA_REFRESH_MIN_INTERVAL_S = 30
@@ -121,6 +131,14 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         f"Subscription: {wilaya_name} ({sub.wilaya_code})\nLast known status: {avail_txt}. Remaining: {remaining_txt}."
     )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lines = ["📖 *Available Commands*\n"]
+    for cmd, desc in BOT_COMMANDS:
+        lines.append(f"/{cmd} — {desc}")
+    lines.append("\n/cancel — Cancel an in-progress registration")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def on_wilaya_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

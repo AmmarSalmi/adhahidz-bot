@@ -4,11 +4,13 @@ import logging
 import os
 
 from dotenv import load_dotenv
+from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler
 
 from .api_client import QuotaApiClient
 from .db import init_db
-from .handlers import change, on_wilaya_selected, start, status, stop
+from .handlers import BOT_COMMANDS, change, help_command, on_wilaya_selected, start, status, stop
+from .registration import build_registration_handler
 from .scheduler import start_scheduler
 
 
@@ -58,6 +60,11 @@ async def _post_init(app: Application) -> None:
     )
     app.bot_data["scheduler"] = scheduler
 
+    # Register the bot menu button with Telegram
+    await app.bot.set_my_commands(
+        [BotCommand(cmd, desc) for cmd, desc in BOT_COMMANDS]
+    )
+
     logger.info(
         "Bot started. Interval=%ss ConfirmFetches=%s ConfirmDelay=%ss BaseURL=%s DB=%s",
         interval_s,
@@ -102,10 +109,14 @@ def main() -> None:
         .build()
     )
 
+    # Registration conversation handler (must be added first for priority)
+    app.add_handler(build_registration_handler())
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("change", change))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))
 
     app.run_polling(allowed_updates=["message", "callback_query"])
