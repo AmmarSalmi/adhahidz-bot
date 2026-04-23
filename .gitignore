@@ -3,3 +3,4 @@
 !.env.example
 !.env.sample
 api_captures/
+captcha_sample.png

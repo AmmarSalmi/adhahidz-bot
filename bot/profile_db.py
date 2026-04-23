@@ -237,6 +237,17 @@ async def get_pending_profiles_for_wilaya(
             return [_row_to_profile(r) for r in rows]
 
 
+async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
+    """Return distinct wilaya codes that have at least one pending profile."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles WHERE status='pending'"
+        ) as cur:
+            rows = await cur.fetchall()
+            return [str(r[0]) for r in rows]
+
+
 async def set_profile_status(db_path: str, profile_id: int, status: str) -> None:
     """Update profile status."""
     async def _op():

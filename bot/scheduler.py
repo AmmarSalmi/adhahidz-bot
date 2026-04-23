@@ -74,11 +74,13 @@ async def _poll_once(
             except Exception:
                 logger.exception("Failed updating wilaya list from scheduler payload")
 
-        subscribed_wilayas = await db_mod.get_distinct_wilayas(db_path)
-        if not subscribed_wilayas:
+        subscribed_wilayas = set(await db_mod.get_distinct_wilayas(db_path))
+        profile_wilayas = set(await profile_db.get_distinct_profile_wilayas(db_path))
+        watched_wilayas = subscribed_wilayas | profile_wilayas
+        if not watched_wilayas:
             return
 
-        for wilaya_code in subscribed_wilayas:
+        for wilaya_code in watched_wilayas:
             status = statuses.get(wilaya_code)
             if status is None:
                 logger.debug("No status found for wilaya=%s at %s", wilaya_code, now)
@@ -103,15 +105,13 @@ async def _poll_once(
                     continue
 
                 to_notify = await db_mod.get_subscribers_to_notify(db_path, wilaya_code)
-                if not to_notify:
-                    continue
+                if to_notify:
+                    remaining_txt = "unknown" if status.remaining is None else str(status.remaining)
+                    msg = f"✅ Quota available in {status.wilaya_name}! Remaining: {remaining_txt} units."
+                    await notify_users(app.bot, to_notify, msg)
+                    await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
-                remaining_txt = "unknown" if status.remaining is None else str(status.remaining)
-                msg = f"✅ Quota available in {status.wilaya_name}! Remaining: {remaining_txt} units."
-                await notify_users(app.bot, to_notify, msg)
-                await db_mod.mark_notified(db_path, to_notify, wilaya_code)
-
-                # Auto-registration: trigger for pending profiles
+                # Auto-registration: trigger for pending profiles (independent of subscriptions)
                 try:
                     pending_profiles = await profile_db.get_pending_profiles_for_wilaya(
                         db_path, wilaya_code
