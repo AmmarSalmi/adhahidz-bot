@@ -12,6 +12,7 @@ import logging
 import time
 from typing import Any
 
+import ddddocr
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -30,6 +31,11 @@ from .registration import (
 )
 
 logger = logging.getLogger(__name__)
+
+try:
+    _ocr = ddddocr.DdddOcr(beta=True, show_ad=False)
+except TypeError:
+    _ocr = ddddocr.DdddOcr(beta=True)
 
 # Conversation states
 (
@@ -119,6 +125,7 @@ async def auto_reg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     state = _auto_state(context)
     state.clear()
     state["profile_id"] = profile.id
+    state["name"] = profile.name
     state["nin"] = profile.nin
     state["cnibe"] = profile.cnibe
     state["phoneNumber"] = profile.phone
@@ -127,10 +134,87 @@ async def auto_reg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     state["communeCode"] = profile.commune_code
     state["email"] = profile.email
 
-    await query.edit_message_text("⏳ Generating CAPTCHA…")
+    await query.edit_message_text("⏳ Attempting automatic registration (solving CAPTCHA)...")
 
-    # Generate CAPTCHA #1
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+    headers["Content-Type"] = "application/json"
+
+    for attempt in range(1, 4):
+        captcha_data = await _fetch_and_solve_captcha(context)
+        if not captcha_data:
+            continue
+            
+        captcha_id, solved_text, _ = captcha_data
+        
+        body = {
+            "nin": state["nin"],
+            "cnibe": state["cnibe"],
+            "phoneNumber": state["phoneNumber"],
+            "email": state.get("email", ""),
+            "password": state["password"],
+            "wilayaId": state["wilayaId"],
+            "communeCode": state["communeCode"],
+            "categoryId": 1,
+            "paymentMethod": "CASH",
+        }
+        
+        req_headers = headers.copy()
+        req_headers["X-Captcha-Id"] = captcha_id
+        req_headers["X-Captcha-Answer"] = solved_text
+        
+        try:
+            resp = await client.post("/api/v2/citizens/register", json=body, headers=req_headers)
+            
+            if 200 <= resp.status_code < 300 or resp.status_code == 425:
+                if resp.status_code == 425:
+                    try: msg = resp.json().get("message", "")
+                    except: msg = ""
+                    await query.edit_message_text(
+                        f"✅ *Auto-CAPTCHA solved!*\n\n⚠️ *Already pending*\n{msg}\n\n"
+                        f"Profile: *{state.get('name', 'Unknown')}*\n"
+                        f"Phone: `{state['phoneNumber']}`\n\n"
+                        "Please enter the *OTP* you received:",
+                        parse_mode="Markdown",
+                    )
+                else:
+                    await query.edit_message_text(
+                        "✅ *Auto-CAPTCHA solved!* Registration submitted!\n\n"
+                        f"Profile: *{state.get('name', 'Unknown')}*\n"
+                        f"Phone: `{state['phoneNumber']}`\n\n"
+                        "An OTP has been sent to your phone.\n"
+                        "Please enter the *OTP*:",
+                        parse_mode="Markdown",
+                    )
+                return AUTO_OTP
+            
+            error_detail = _extract_error_message(resp)
+            logger.warning("Auto-registration attempt %d failed: %s (HTTP %s)", attempt, error_detail, resp.status_code)
+        except Exception as exc:
+            logger.error("Auto-registration network error: %s", exc)
+
+    # If we fall through, 3 attempts failed.
+    await update.effective_chat.send_message("⚠️ Auto-CAPTCHA failed 3 times. Falling back to manual entry.")
     return await _generate_captcha(update, context, captcha_key="captcha1")
+
+
+async def _fetch_and_solve_captcha(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, str, bytes] | None:
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+    try:
+        resp = await client.get("/api/v1/captcha/generate", headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+        captcha_id = data["captchaId"]
+        image_uri = data["captchaImage"]
+        b64 = image_uri.split(",", 1)[1] if "," in image_uri else image_uri
+        image_bytes = base64.b64decode(b64)
+        
+        solved_text = _ocr.classification(image_bytes).upper()
+        return captcha_id, solved_text, image_bytes
+    except Exception as exc:
+        logger.error("Failed to fetch/solve captcha: %s", exc)
+        return None
 
 
 # ─── CAPTCHA generation helper ────────────────────────────────────────────────
@@ -234,12 +318,17 @@ async def collect_captcha_1(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             except Exception:
                 msg = ""
             await update.message.reply_text(
-                f"⚠️ *Already pending*\n{msg}\n\nPlease enter the *OTP* you received:",
+                f"⚠️ *Already pending*\n{msg}\n\n"
+                f"Profile: *{state.get('name', 'Unknown')}*\n"
+                f"Phone: `{state['phoneNumber']}`\n\n"
+                "Please enter the *OTP* you received:",
                 parse_mode="Markdown",
             )
         else:
             await update.message.reply_text(
                 "✅ Registration submitted!\n\n"
+                f"Profile: *{state.get('name', 'Unknown')}*\n"
+                f"Phone: `{state['phoneNumber']}`\n\n"
                 "An OTP has been sent to your phone.\n"
                 "Please enter the *OTP*:",
                 parse_mode="Markdown",
@@ -263,8 +352,51 @@ async def collect_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     state["otp"] = update.message.text.strip()
 
     await update.message.reply_text(
-        "✅ OTP recorded.\n\n⏳ Generating CAPTCHA for verification…"
+        "✅ OTP recorded.\n\n⏳ Attempting to verify automatically (solving CAPTCHA)..."
     )
+    
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+    headers["Content-Type"] = "application/json"
+    
+    for attempt in range(1, 4):
+        captcha_data = await _fetch_and_solve_captcha(context)
+        if not captcha_data:
+            continue
+            
+        captcha_id, solved_text, _ = captcha_data
+        
+        body = {
+            "nin": state["nin"],
+            "otp": state["otp"],
+        }
+        
+        req_headers = headers.copy()
+        req_headers["X-Captcha-Id"] = captcha_id
+        req_headers["X-Captcha-Answer"] = solved_text
+        
+        try:
+            resp = await client.post("/api/v2/citizens/register", json=body, headers=req_headers)
+            
+            if 200 <= resp.status_code < 300:
+                db_path: str = context.application.bot_data["db_path"]
+                profile_id = state.get("profile_id")
+                if profile_id:
+                    await profile_db.set_profile_status(db_path, profile_id, "registered")
+                await update.message.reply_text(
+                    "🎉 *Registration Complete!*\n\n"
+                    "Congratulations — your registration has been verified!",
+                    parse_mode="Markdown",
+                )
+                context.user_data.pop("auto_reg", None)
+                return ConversationHandler.END
+            
+            error_detail = _extract_error_message(resp)
+            logger.warning("OTP verification attempt %d failed: %s", attempt, error_detail)
+        except Exception as exc:
+            logger.error("OTP verification network error: %s", exc)
+
+    await update.message.reply_text("⚠️ Auto-CAPTCHA failed 3 times. Falling back to manual entry.")
     return await _generate_captcha(update, context, captcha_key="captcha2")
 
 

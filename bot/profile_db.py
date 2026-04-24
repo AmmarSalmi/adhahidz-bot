@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id       INTEGER NOT NULL,
   priority      INTEGER NOT NULL DEFAULT 0,
+  name          TEXT NOT NULL DEFAULT '',
   nin           TEXT NOT NULL,
   cnibe         TEXT NOT NULL,
   phone         TEXT NOT NULL,
@@ -37,6 +38,7 @@ class Profile:
     id: int
     user_id: int
     priority: int
+    name: str
     nin: str
     cnibe: str
     phone: str
@@ -55,22 +57,23 @@ def _row_to_profile(row: tuple) -> Profile:
         id=int(row[0]),
         user_id=int(row[1]),
         priority=int(row[2]),
-        nin=str(row[3]),
-        cnibe=str(row[4]),
-        phone=str(row[5]),
-        password=str(row[6]),
-        wilaya_id=int(row[7]),
-        wilaya_name=str(row[8]),
-        commune_code=str(row[9]),
-        commune_name=str(row[10]),
-        email=str(row[11]),
-        status=str(row[12]),
-        created_at=str(row[13]),
+        name=str(row[3]),
+        nin=str(row[4]),
+        cnibe=str(row[5]),
+        phone=str(row[6]),
+        password=str(row[7]),
+        wilaya_id=int(row[8]),
+        wilaya_name=str(row[9]),
+        commune_code=str(row[10]),
+        commune_name=str(row[11]),
+        email=str(row[12]),
+        status=str(row[13]),
+        created_at=str(row[14]),
     )
 
 
 _SELECT_COLS = (
-    "id, user_id, priority, nin, cnibe, phone, password, "
+    "id, user_id, priority, name, nin, cnibe, phone, password, "
     "wilaya_id, wilaya_name, commune_code, commune_name, email, status, created_at"
 )
 
@@ -101,6 +104,10 @@ async def init_profiles_table(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")
         await db.execute(CREATE_PROFILES_TABLE_SQL)
+        try:
+            await db.execute("ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';")
+        except aiosqlite.OperationalError:
+            pass
         await db.commit()
 
 
@@ -119,13 +126,14 @@ async def add_profile(db_path: str, user_id: int, data: dict[str, Any]) -> int:
 
             cursor = await db.execute(
                 """
-                INSERT INTO profiles (user_id, priority, nin, cnibe, phone, password,
+                INSERT INTO profiles (user_id, priority, name, nin, cnibe, phone, password,
                     wilaya_id, wilaya_name, commune_code, commune_name, email)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
                     next_priority,
+                    data.get("name", ""),
                     data["nin"],
                     data["cnibe"],
                     data["phone"],
@@ -172,7 +180,7 @@ async def update_profile_field(
 ) -> bool:
     """Update a single field on a profile. Returns True if updated."""
     allowed_fields = {
-        "nin", "cnibe", "phone", "password", "wilaya_id", "wilaya_name",
+        "name", "nin", "cnibe", "phone", "password", "wilaya_id", "wilaya_name",
         "commune_code", "commune_name", "email", "status",
     }
     if field not in allowed_fields:

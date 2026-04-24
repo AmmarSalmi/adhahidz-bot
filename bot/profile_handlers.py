@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Add-profile conversation states ──────────────────────────────────────────
 (
+    AP_NAME,
     AP_NIN,
     AP_CNIBE,
     AP_PHONE,
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
     AP_WILAYA,
     AP_COMMUNE,
     AP_EMAIL,
-) = range(7)
+) = range(8)
 
 
 def _ap_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
@@ -43,7 +44,20 @@ async def addprofile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["add_profile"] = {}
     await update.effective_message.reply_text(
         "📋 *Add Registration Profile*\n\n"
-        "Step 1/7 — Enter the *NIN* (18 digits):",
+        "Step 1/8 — Enter a short *Name* for this profile (e.g. 'Dad', 'My Profile'):",
+        parse_mode="Markdown",
+    )
+    return AP_NAME
+
+
+async def ap_collect_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text:
+        await update.message.reply_text("❌ Name cannot be empty. Try again:")
+        return AP_NAME
+    _ap_state(context)["name"] = text
+    await update.message.reply_text(
+        f"✅ Name '{text}' recorded.\n\nStep 2/8 — Enter the *NIN* (18 digits):",
         parse_mode="Markdown",
     )
     return AP_NIN
@@ -59,7 +73,7 @@ async def ap_collect_nin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return AP_NIN
     _ap_state(context)["nin"] = text
     await update.message.reply_text(
-        "✅ NIN recorded.\n\nStep 2/7 — Enter the *CNIBE* (9 digits):",
+        "✅ NIN recorded.\n\nStep 3/8 — Enter the *CNIBE* (9 digits):",
         parse_mode="Markdown",
     )
     return AP_CNIBE
@@ -75,7 +89,7 @@ async def ap_collect_cnibe(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return AP_CNIBE
     _ap_state(context)["cnibe"] = text
     await update.message.reply_text(
-        "✅ CNIBE recorded.\n\nStep 3/7 — Enter the *phone number* (10 digits, starts with 0):",
+        "✅ CNIBE recorded.\n\nStep 4/8 — Enter the *phone number* (10 digits, starts with 0):",
         parse_mode="Markdown",
     )
     return AP_PHONE
@@ -92,7 +106,7 @@ async def ap_collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     _ap_state(context)["phone"] = text
     await update.message.reply_text(
         "✅ Phone recorded.\n\n"
-        "Step 4/7 — Enter a *password* for the adhahi.dz account:\n"
+        "Step 5/8 — Enter a *password* for the adhahi.dz account:\n"
         "_(≥6 chars, digit, lowercase, uppercase, special char, no spaces)_",
         parse_mode="Markdown",
     )
@@ -119,7 +133,7 @@ async def ap_collect_password(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "✅ Password recorded.\n\nStep 5/7 — Select the *Wilaya*:",
+        "✅ Password recorded.\n\nStep 6/8 — Select the *Wilaya*:",
         parse_mode="Markdown",
         reply_markup=_wilaya_kb(wilayas),
     )
@@ -190,7 +204,7 @@ async def ap_on_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         rows.append(row)
 
     await query.edit_message_text(
-        "Step 6/7 — Select the *Commune*:",
+        "Step 7/8 — Select the *Commune*:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -216,7 +230,7 @@ async def ap_on_commune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     await query.edit_message_text(
         f"✅ Commune *{commune_name}* selected.\n\n"
-        "Step 7/7 — Enter an *email* (optional, send `-` to skip):",
+        "Step 8/8 — Enter an *email* (optional, send `-` to skip):",
         parse_mode="Markdown",
     )
     return AP_EMAIL
@@ -246,7 +260,7 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data.pop("add_profile", None)
 
     await update.message.reply_text(
-        f"🎉 Profile #{profile_id} saved!\n\n"
+        f"🎉 Profile #{profile_id} ('{state.get('name', '')}') saved!\n\n"
         f"NIN: `{state['nin'][:4]}…{state['nin'][-4:]}`\n"
         f"Wilaya: {state.get('wilaya_name', state['wilaya_id'])}\n"
         f"Commune: {state.get('commune_name', state['commune_code'])}\n"
@@ -268,6 +282,7 @@ def build_addprofile_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("addprofile", addprofile_start)],
         states={
+            AP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_collect_name)],
             AP_NIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_collect_nin)],
             AP_CNIBE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_collect_cnibe)],
             AP_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_collect_phone)],
@@ -300,7 +315,7 @@ async def list_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         status_icon = {"pending": "🟡", "registering": "🔄", "registered": "✅", "failed": "❌"}.get(p.status, "❓")
         masked_nin = f"{p.nin[:4]}…{p.nin[-4:]}"
         lines.append(
-            f"*{i}.* `#{p.id}` {status_icon} {p.status}\n"
+            f"*{i}.* `#{p.id}` **{p.name}** {status_icon} {p.status}\n"
             f"   NIN: `{masked_nin}` | Phone: `{p.phone}`\n"
             f"   {p.wilaya_name} → {p.commune_name}\n"
         )
@@ -324,7 +339,7 @@ async def deleteprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         masked = f"{p.nin[:4]}…{p.nin[-4:]}"
         rows.append([
             InlineKeyboardButton(
-                text=f"#{p.id} {masked} — {p.wilaya_name}",
+                text=f"#{p.id} {p.name} ({masked}) — {p.wilaya_name}",
                 callback_data=f"del_prof:{p.id}",
             )
         ])
@@ -368,7 +383,7 @@ async def editprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         masked = f"{p.nin[:4]}…{p.nin[-4:]}"
         rows.append([
             InlineKeyboardButton(
-                text=f"#{p.id} {masked} — {p.wilaya_name}",
+                text=f"#{p.id} {p.name} ({masked}) — {p.wilaya_name}",
                 callback_data=f"edit_prof:{p.id}",
             )
         ])
@@ -389,7 +404,7 @@ async def on_edit_profile_select(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["editing_profile_id"] = profile_id
 
     fields = [
-        ("nin", "NIN"), ("cnibe", "CNIBE"), ("phone", "Phone"),
+        ("name", "Name"), ("nin", "NIN"), ("cnibe", "CNIBE"), ("phone", "Phone"),
         ("password", "Password"), ("email", "Email"), ("status", "Status → pending"),
     ]
     rows = []
@@ -433,6 +448,7 @@ async def on_edit_field_select(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["edit_field"] = field
 
     field_labels = {
+        "name": "Profile Name",
         "nin": "NIN (18 digits)",
         "cnibe": "CNIBE (9 digits)",
         "phone": "Phone (10 digits, starts with 0)",
@@ -449,7 +465,11 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     profile_id = context.user_data.get("edit_profile_id", 0)
 
     # Validate based on field
-    if field == "nin":
+    if field == "name":
+        if not text:
+            await update.message.reply_text("❌ Name cannot be empty. Try again:")
+            return EDIT_WAITING_VALUE
+    elif field == "nin":
         if not text.isdigit() or len(text) != 18:
             await update.message.reply_text("❌ NIN must be 18 digits. Try again:")
             return EDIT_WAITING_VALUE
@@ -528,7 +548,7 @@ async def reorder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     lines = ["Current order:\n"]
     for i, p in enumerate(profiles, 1):
         masked = f"{p.nin[:4]}…{p.nin[-4:]}"
-        lines.append(f"  {i}. `#{p.id}` {masked} — {p.wilaya_name}")
+        lines.append(f"  {i}. `#{p.id}` {p.name} ({masked}) — {p.wilaya_name}")
 
     context.user_data["reorder_profiles"] = profiles
     lines.append(
