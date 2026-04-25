@@ -323,6 +323,64 @@ async def list_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+# ─── /viewprofile ─────────────────────────────────────────────────────────────
+
+async def viewprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db_path: str = context.application.bot_data["db_path"]
+    user_id = update.effective_user.id
+    profiles = await profile_db.get_profiles(db_path, user_id)
+
+    if not profiles:
+        await update.effective_message.reply_text("No profiles to view.")
+        return
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in profiles:
+        masked = f"{p.nin[:4]}…{p.nin[-4:]}"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"#{p.id} {p.name} ({masked}) — {p.wilaya_name}",
+                callback_data=f"view_prof:{p.id}",
+            )
+        ])
+    await update.effective_message.reply_text(
+        "Select a profile to *view full details*:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def on_view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    profile_id = int((query.data or "").split(":", 1)[1])
+    db_path: str = context.application.bot_data["db_path"]
+    user_id = update.effective_user.id
+
+    profile = await profile_db.get_profile(db_path, profile_id, user_id)
+    if not profile:
+        await query.edit_message_text("❌ Profile not found.")
+        return
+
+    lines = [
+        f"📋 *Profile #{profile.id} — {profile.name}*",
+        f"Status: {profile.status}",
+        "",
+        f"*NIN:* `{profile.nin}`",
+        f"*CNIBE:* `{profile.cnibe}`",
+        f"*Phone:* `{profile.phone}`",
+        f"*Password:* `{profile.password}`",
+        f"*Email:* `{profile.email or '-'}`",
+        "",
+        f"*Wilaya:* {profile.wilaya_name} ({profile.wilaya_id})",
+        f"*Commune:* {profile.commune_name} ({profile.commune_code})"
+    ]
+    await query.edit_message_text("\n".join(lines), parse_mode="Markdown")
+
+
 # ─── /deleteprofile ───────────────────────────────────────────────────────────
 
 async def deleteprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

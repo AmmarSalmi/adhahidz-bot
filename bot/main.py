@@ -20,6 +20,8 @@ from .profile_handlers import (
     list_profiles,
     on_delete_profile,
     on_edit_profile_select,
+    on_view_profile,
+    viewprofile,
 )
 from .registration import build_registration_handler
 from .scheduler import start_scheduler
@@ -134,6 +136,7 @@ def main() -> None:
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("profiles", list_profiles))
+    app.add_handler(CommandHandler("viewprofile", viewprofile))
     app.add_handler(CommandHandler("deleteprofile", deleteprofile))
     app.add_handler(CommandHandler("editprofile", editprofile))
 
@@ -141,6 +144,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))
     app.add_handler(CallbackQueryHandler(on_delete_profile, pattern=r"^del_prof:"))
     app.add_handler(CallbackQueryHandler(on_edit_profile_select, pattern=r"^edit_prof:"))
+    app.add_handler(CallbackQueryHandler(on_view_profile, pattern=r"^view_prof:"))
 
     app.run_polling(allowed_updates=["message", "callback_query"])
 

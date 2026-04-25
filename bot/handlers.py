@@ -20,6 +20,7 @@ BOT_COMMANDS = [
     ("profiles", "List your registration profiles"),
     ("editprofile", "Edit a registration profile"),
     ("deleteprofile", "Delete a registration profile"),
+    ("viewprofile", "View full profile details (incl. password)"),
     ("reorder", "Change profile priority order"),
     ("help", "Show all available commands"),
 ]
