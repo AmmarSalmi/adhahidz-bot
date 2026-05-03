@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from . import db as db_mod
+from . import profile_db
 from .api_client import QuotaStatus
 
 # Canonical list of bot commands — used by the /help handler and set_my_commands.
@@ -15,6 +17,7 @@ BOT_COMMANDS = [
     ("change", "Change your subscribed wilaya"),
     ("status", "Check your current subscription status"),
     ("stop", "Unsubscribe from notifications"),
+    ("fetchinfo", "Last fetch time & watched wilayas"),
     ("register", "Manual adhahi.dz registration flow"),
     ("addprofile", "Add an auto-registration profile"),
     ("profiles", "List your registration profiles"),
@@ -137,6 +140,61 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         f"Subscription: {wilaya_name} ({sub.wilaya_code})\nLast known status: {avail_txt}. Remaining: {remaining_txt}."
     )
+
+
+async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the last successful quota fetch time and all watched wilayas."""
+    db_path: str = context.application.bot_data["db_path"]
+
+    # --- Last fetch timestamp ---
+    raw_ts: str | None = context.application.bot_data.get("last_fetch_ts")
+    if raw_ts:
+        try:
+            dt = datetime.fromisoformat(raw_ts).astimezone(timezone.utc)
+            fetch_line = f"🕐 *Last fetch:* `{dt.strftime('%Y-%m-%d %H:%M:%S')} UTC`"
+        except ValueError:
+            fetch_line = f"🕐 *Last fetch:* `{raw_ts}`"
+    else:
+        fetch_line = "🕐 *Last fetch:* _not done yet_"
+
+    # --- Wilayas being watched ---
+    wilaya_lookup = dict(_get_wilaya_list(context))  # code -> name
+
+    # Subscriptions
+    try:
+        sub_codes = set(await db_mod.get_distinct_wilayas(db_path))
+    except Exception:
+        logger.exception("fetchinfo: failed to load subscription wilayas")
+        sub_codes = set()
+
+    # Pending auto-registration profiles
+    try:
+        prof_codes = set(await profile_db.get_distinct_profile_wilayas(db_path))
+    except Exception:
+        logger.exception("fetchinfo: failed to load profile wilayas")
+        prof_codes = set()
+
+    all_codes = sub_codes | prof_codes
+
+    if not all_codes:
+        watched_section = "_No wilayas are currently being watched._"
+    else:
+        rows = []
+        for code in sorted(all_codes):
+            name = wilaya_lookup.get(code, code)
+            tags = []
+            if code in sub_codes:
+                tags.append("📬 subscription")
+            if code in prof_codes:
+                tags.append("🤖 auto-reg")
+            rows.append(f"  • *{name}* ({code}) — {', '.join(tags)}")
+        watched_section = "\n".join(rows)
+
+    msg = (
+        f"{fetch_line}\n\n"
+        f"👁 *Watched wilayas:*\n{watched_section}"
+    )
+    await update.effective_message.reply_text(msg, parse_mode="Markdown")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

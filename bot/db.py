@@ -63,6 +63,10 @@ async def init_db(db_path: str) -> None:
         # Also create the profiles table (for auto-registration)
         from .profile_db import CREATE_PROFILES_TABLE_SQL
         await db.execute(CREATE_PROFILES_TABLE_SQL)
+        try:
+            await db.execute("ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';")
+        except aiosqlite.OperationalError:
+            pass
         await db.commit()
 
 

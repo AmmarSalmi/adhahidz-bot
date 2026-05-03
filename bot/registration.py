@@ -583,7 +583,7 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     try:
         resp = await client.post(
-            "/api/v2/citizens/register",
+            "/api/v1/citizens/verify-otp",
             json=body,
             headers=headers,
         )

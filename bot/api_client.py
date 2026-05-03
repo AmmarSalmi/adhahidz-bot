@@ -179,8 +179,10 @@ class QuotaApiClient:
         await self._client.aclose()
 
     async def fetch_wilaya_quotas(self) -> dict[str, QuotaStatus]:
+        import time
         # Adhahi endpoint from provided curl
-        path = "/api/v1/public/wilaya-quotas"
+        # Add cache-busting parameter to bypass CDN/proxy caches
+        path = f"/api/v1/public/wilaya-quotas?_t={int(time.time() * 1000)}"
         delay_s = 0.5
         last_exc: Exception | None = None
         for attempt in range(3):

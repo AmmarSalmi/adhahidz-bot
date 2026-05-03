@@ -376,7 +376,7 @@ async def collect_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         req_headers["X-Captcha-Answer"] = solved_text
         
         try:
-            resp = await client.post("/api/v2/citizens/register", json=body, headers=req_headers)
+            resp = await client.post("/api/v1/citizens/verify-otp", json=body, headers=req_headers)
             
             if 200 <= resp.status_code < 300:
                 db_path: str = context.application.bot_data["db_path"]
@@ -426,7 +426,7 @@ async def collect_captcha_2(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     client = _get_http_client(context)
 
     try:
-        resp = await client.post("/api/v2/citizens/register", json=body, headers=headers)
+        resp = await client.post("/api/v1/citizens/verify-otp", json=body, headers=headers)
     except Exception as exc:
         logger.error("OTP verification network error: %s", exc)
         await update.message.reply_text(f"❌ Network error: `{exc}`", parse_mode="Markdown")

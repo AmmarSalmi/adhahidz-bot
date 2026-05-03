@@ -10,7 +10,7 @@ from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, 
 from .api_client import QuotaApiClient
 from .auto_registration import build_auto_registration_handler
 from .db import init_db
-from .handlers import BOT_COMMANDS, change, help_command, on_wilaya_selected, start, status, stop
+from .handlers import BOT_COMMANDS, change, fetchinfo, help_command, on_wilaya_selected, start, status, stop
 from .profile_handlers import (
     build_addprofile_handler,
     build_editprofile_handler,
@@ -134,6 +134,7 @@ def main() -> None:
     app.add_handler(CommandHandler("change", change))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(CommandHandler("fetchinfo", fetchinfo))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("profiles", list_profiles))
     app.add_handler(CommandHandler("viewprofile", viewprofile))

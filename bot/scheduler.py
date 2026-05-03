@@ -60,6 +60,9 @@ async def _poll_once(
         statuses = await api_client.fetch_wilaya_quotas()
         now = datetime.now(timezone.utc).isoformat()
 
+        # Stamp the last successful fetch timestamp so /fetchinfo can report it
+        app.bot_data["last_fetch_ts"] = now
+
         # Update last-known cache
         last_known: dict[str, QuotaStatus] = app.bot_data.setdefault("last_known", {})
         for code, status in statuses.items():
