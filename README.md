@@ -2,6 +2,13 @@
 
 A fully dockerized Telegram bot that periodically checks Wilaya-level quota availability from a REST API and notifies subscribed users when quota opens.
 
+### Features
+- **Quota Monitoring**: Periodically checks Wilaya-level quota availability from the REST API.
+- **Notifications**: Alerts subscribed users when quota becomes available in their chosen Wilaya.
+- **Auto-Registration**: Comprehensive profile management to automatically register users, handle OTPs, and create orders the moment quotas open. Includes support for selecting payment methods (CASH, TPE, EN_LIGNE).
+- **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows.
+- **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
+
 ### Prerequisites
 - Docker + Docker Compose
 
@@ -24,6 +31,7 @@ Optional tuning:
 - `CHECK_INTERVAL_SECONDS`: how often to poll the API (default `300`)
 - `CONFIRM_FETCHES`: when `available=true` is detected, re-fetch this many extra times before notifying (default `2`)
 - `CONFIRM_DELAY_SECONDS`: delay between confirmation re-fetches in seconds (default `1`)
+- `TWO_CAPTCHA_API_KEY`: API key for 2Captcha service (optional, falls back to local `ddddocr` if not provided)
 
 ### Run
 
@@ -34,10 +42,26 @@ docker compose up --build
 SQLite data persists in the named volume `bot-data` mounted at `/data`.
 
 ### Bot commands
-- `/start`: pick a Wilaya and subscribe
-- `/change`: change your Wilaya subscription
-- `/status`: show your subscription and last known quota status
-- `/stop`: unsubscribe
+
+**Quota & Monitoring**
+- `/start`: Subscribe to wilaya quota notifications
+- `/change`: Change your subscribed wilaya
+- `/status`: Check your current subscription status
+- `/stop`: Unsubscribe from notifications
+- `/fetchinfo`: Last fetch time & watched wilayas
+
+**Profile & Auto-Registration**
+- `/addprofile`: Add an auto-registration profile
+- `/profiles`: List your registration profiles
+- `/viewprofile`: View full profile details (incl. password)
+- `/editprofile`: Edit a registration profile
+- `/deleteprofile`: Delete a registration profile
+- `/reorder`: Change profile priority order
+- `/checkprofile`: Check if a profile NIN is registered on server
+- `/verifyotp`: Verify OTP for a submitted profile
+- `/register`: Manual adhahi.dz registration flow
+- `/testcaptchasolvers`: Test both CAPTCHA solvers side-by-side
+- `/help`: Show all available commands
 
 ### Adapting to a different quota API
 All API shape assumptions are centralized in `bot/api_client.py`:
