@@ -8,9 +8,9 @@ from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler
 
 from .api_client import QuotaApiClient
-from .auto_registration import build_auto_registration_handler
+from .auto_registration import build_verifyotp_handler
 from .db import init_db
-from .handlers import BOT_COMMANDS, change, fetchinfo, help_command, on_wilaya_selected, start, status, stop
+from .handlers import BOT_COMMANDS, change, checkprofile, fetchinfo, help_command, on_check_profile, on_wilaya_selected, start, status, stop, test_captcha_solvers
 from .profile_handlers import (
     build_addprofile_handler,
     build_editprofile_handler,
@@ -125,7 +125,7 @@ def main() -> None:
     # Conversation handlers (must be added first for priority)
     app.add_handler(build_registration_handler())
     app.add_handler(build_addprofile_handler())
-    app.add_handler(build_auto_registration_handler())
+    app.add_handler(build_verifyotp_handler())
     app.add_handler(build_editprofile_handler())
     app.add_handler(build_reorder_handler())
 
@@ -136,6 +136,8 @@ def main() -> None:
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("fetchinfo", fetchinfo))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("testcaptchasolvers", test_captcha_solvers))
+    app.add_handler(CommandHandler("checkprofile", checkprofile))
     app.add_handler(CommandHandler("profiles", list_profiles))
     app.add_handler(CommandHandler("viewprofile", viewprofile))
     app.add_handler(CommandHandler("deleteprofile", deleteprofile))
@@ -143,6 +145,7 @@ def main() -> None:
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))
+    app.add_handler(CallbackQueryHandler(on_check_profile, pattern=r"^chk_prof:"))
     app.add_handler(CallbackQueryHandler(on_delete_profile, pattern=r"^del_prof:"))
     app.add_handler(CallbackQueryHandler(on_edit_profile_select, pattern=r"^edit_prof:"))
     app.add_handler(CallbackQueryHandler(on_view_profile, pattern=r"^view_prof:"))

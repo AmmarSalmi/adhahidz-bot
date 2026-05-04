@@ -6,11 +6,13 @@ Steps:
   3. Collect phone (10 digits, starts with 0)
   4. Wilaya selection
   5. Commune selection
-  6. Generate & display CAPTCHA
-  7. Collect CAPTCHA answer
-  8. Submit registration
-  9. Collect OTP
- 10. Verify OTP
+  6. Password
+  7. Payment method selection
+  8. Generate & display CAPTCHA
+  9. Collect CAPTCHA answer
+ 10. Submit registration
+ 11. Collect OTP
+ 12. Verify OTP
 """
 from __future__ import annotations
 
@@ -43,10 +45,18 @@ logger = logging.getLogger(__name__)
     SHOW_CAPTCHA,
     ASK_CAPTCHA,
     ASK_PASSWORD,
+    ASK_PAYMENT_METHOD,
     SUBMITTING,
     ASK_OTP,
     VERIFYING_OTP,
-) = range(11)
+) = range(12)
+
+# Valid payment methods and their display labels
+_PAYMENT_METHODS = {
+    "CASH": "💵 Cash",
+    "TPE": "💳 Credit Card (TPE)",
+    "EN_LIGNE": "🌐 Pay Online",
+}
 
 # How long a CAPTCHA is valid (seconds)
 _CAPTCHA_TTL_S = 300
@@ -101,7 +111,7 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.effective_message.reply_text(
         "📋 *Forced Registration*\n\n"
         "I'll guide you through the registration process step by step.\n\n"
-        "Step 1/9 — Enter your *NIN* (National Identification Number).\n"
+        "Step 1/10 — Enter your *NIN* (National Identification Number).\n"
         "It must be exactly *18 digits*.",
         parse_mode="Markdown",
     )
@@ -123,7 +133,7 @@ async def collect_nin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     state["nin"] = text
     await update.message.reply_text(
         "✅ NIN recorded.\n\n"
-        "Step 2/9 — Enter your *CNIBE* (ID card issue number).\n"
+        "Step 2/10 — Enter your *CNIBE* (ID card issue number).\n"
         "It must be exactly *9 digits*.",
         parse_mode="Markdown",
     )
@@ -145,7 +155,7 @@ async def collect_cnibe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     state["cnibe"] = text
     await update.message.reply_text(
         "✅ CNIBE recorded.\n\n"
-        "Step 3/9 — Enter your *phone number*.\n"
+        "Step 3/10 — Enter your *phone number*.\n"
         "It must be exactly *10 digits* and start with *0*.",
         parse_mode="Markdown",
     )
@@ -178,7 +188,7 @@ async def collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     await update.message.reply_text(
         "✅ Phone number recorded.\n\n"
-        "Step 4/9 — Select your *Wilaya*:",
+        "Step 4/10 — Select your *Wilaya*:",
         parse_mode="Markdown",
         reply_markup=_wilaya_keyboard(wilayas),
     )
@@ -251,7 +261,7 @@ async def on_wilaya_selected(
 
     keyboard = _commune_keyboard(active_communes)
     await query.edit_message_text(
-        "Step 5/9 — Select your *Commune*:",
+        "Step 5/10 — Select your *Commune*:",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -314,7 +324,7 @@ async def on_commune_selected(
 
     await query.edit_message_text(
         f"✅ Commune *{commune_name}* selected.\n\n"
-        "Step 6/9 — Enter a *password* for your adhahi.dz account:\n"
+        "Step 6/10 — Enter a *password* for your adhahi.dz account:\n"
         "_(at least 6 characters)_",
         parse_mode="Markdown",
     )
@@ -421,11 +431,48 @@ async def collect_password(
     state = _reg_state(context)
     state["password"] = text
 
+    # Show payment method selection
+    pm_rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"reg_pm:{code}")]
+        for code, label in _PAYMENT_METHODS.items()
+    ]
     await update.message.reply_text(
         "✅ Password recorded.\n\n"
-        "⏳ Generating CAPTCHA…"
+        "Step 7/10 — Select a *payment method*:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(pm_rows),
     )
-    return await _generate_and_send_captcha(update, context)
+    return ASK_PAYMENT_METHOD
+
+
+async def on_payment_method_selected(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Handle payment method selection in the /register flow."""
+    query = update.callback_query
+    if not query:
+        return ASK_PAYMENT_METHOD
+    await query.answer()
+
+    data = query.data or ""
+    if not data.startswith("reg_pm:"):
+        return ASK_PAYMENT_METHOD
+
+    method = data.split(":", 1)[1]
+    if method not in _PAYMENT_METHODS:
+        await query.edit_message_text("❌ Invalid payment method. Try again.")
+        return ASK_PAYMENT_METHOD
+
+    state = _reg_state(context)
+    state["paymentMethod"] = method
+
+    label = _PAYMENT_METHODS[method]
+    await query.edit_message_text(
+        f"✅ Payment method *{label}* selected.\n\n"
+        "⏳ Generating CAPTCHA…",
+        parse_mode="Markdown",
+    )
+    return await _generate_and_send_captcha(update, context, edit_message=None)
 
 
 def _validate_password(pw: str) -> list[str]:
@@ -462,7 +509,7 @@ async def _submit_registration(
         "wilayaId": state["wilayaId"],
         "communeCode": state["communeCode"],
         "categoryId": 1,
-        "paymentMethod": "CASH",
+        "paymentMethod": state.get("paymentMethod", "CASH"),
     }
 
     headers = _build_headers(context)
@@ -496,7 +543,7 @@ async def _submit_registration(
         )
         await update.effective_message.reply_text(
             "✅ Registration submitted!\n\n"
-            "Step 7/9 — An OTP has been sent to your phone.\n"
+            "Step 8/10 — An OTP has been sent to your phone.\n"
             "Please enter the *OTP* you received:",
             parse_mode="Markdown",
         )
@@ -659,6 +706,9 @@ def build_registration_handler() -> ConversationHandler:
             ASK_PASSWORD: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_password),
             ],
+            ASK_PAYMENT_METHOD: [
+                CallbackQueryHandler(on_payment_method_selected, pattern=r"^reg_pm:"),
+            ],
             ASK_OTP: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_otp),
             ],
@@ -667,3 +717,79 @@ def build_registration_handler() -> ConversationHandler:
         per_user=True,
         per_chat=True,
     )
+
+
+from . import profile_db
+
+async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: profile_db.Profile) -> tuple[str, str, int]:
+    """Returns (status, status_message, http_code). status is 'pre-registered', 'registered', 'pending', or 'error'."""
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+    headers["Content-Type"] = "application/json"
+    headers["Referer"] = "https://adhahi.dz/activation"
+    headers["Origin"] = "https://adhahi.dz"
+
+    try:
+        resp = await client.post(
+            "/api/v1/citizens/resend-otp",
+            json={"nin": profile.nin},
+            headers=headers,
+        )
+    except Exception as exc:
+        return "error", f"Network error: {exc}", 0
+
+    if 200 <= resp.status_code < 300:
+        return "pre-registered", "An OTP has been sent — use /verifyotp to complete verification.", resp.status_code
+    else:
+        try:
+            error_msg = resp.json().get("message", resp.text)
+        except Exception:
+            error_msg = resp.text
+        
+        if "Compte déjà actif" in error_msg:
+            # Login to check if the user has an order
+            from .auto_registration import _fetch_and_solve_captcha
+            access_token = None
+            login_msg = "Failed to login after 3 attempts."
+            for attempt in range(3):
+                solved = await _fetch_and_solve_captcha(client, headers)
+                if not solved:
+                    continue
+                captcha_id, answer, _ = solved
+                login_headers = {**headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
+                login_body = {
+                    "nin": profile.nin,
+                    "password": profile.password,
+                    "deviceInfo": "WEB_APP",
+                    "sessionType": "WEB"
+                }
+                try:
+                    login_resp = await client.post("/api/v1/citizens/login", json=login_body, headers=login_headers)
+                    if 200 <= login_resp.status_code < 300:
+                        access_token = login_resp.json().get("token")
+                        break
+                    else:
+                        login_msg = f"Login failed: HTTP {login_resp.status_code}"
+                except Exception as exc:
+                    login_msg = f"Login error: {exc}"
+            
+            if not access_token:
+                return "registered", f"Account is active, but couldn't verify orders (Login failed: {login_msg})", resp.status_code
+            
+            order_headers = {**headers, "Authorization": f"Bearer {access_token}", "Referer": "https://adhahi.dz/user/confirmation"}
+            try:
+                orders_resp = await client.get("/api/v1/orders/my-orders?page=0&size=10", headers=order_headers)
+                if 200 <= orders_resp.status_code < 300:
+                    orders_data = orders_resp.json()
+                    recent = orders_data.get("recentOrders", [])
+                    has_pending = any(o.get("status") == "PENDING" for o in recent)
+                    if has_pending:
+                        return "ordered", "Account is active and has a PENDING order.", resp.status_code
+                    else:
+                        return "registered", "Account is active, but no pending orders found.", resp.status_code
+                else:
+                    return "registered", f"Account is active, but failed to fetch orders (HTTP {orders_resp.status_code})", resp.status_code
+            except Exception as exc:
+                return "registered", f"Account is active, but failed to fetch orders: {exc}", resp.status_code
+        else:
+            return "pending", error_msg, resp.status_code

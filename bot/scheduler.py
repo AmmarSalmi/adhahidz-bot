@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from . import db as db_mod
 from . import profile_db
 from .api_client import QuotaApiClient, QuotaStatus
-from .auto_registration import notify_profile_owners
+from .auto_registration import auto_submit_profiles, remind_preregistered_profiles
 from .notifier import notify_users
 
 logger = logging.getLogger(__name__)
@@ -114,18 +114,18 @@ async def _poll_once(
                     await notify_users(app.bot, to_notify, msg)
                     await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
-                # Auto-registration: trigger for pending profiles (independent of subscriptions)
+                # Auto-registration: trigger for pending + registered profiles
                 try:
-                    pending_profiles = await profile_db.get_pending_profiles_for_wilaya(
-                        db_path, wilaya_code
+                    actionable_profiles = await profile_db.get_profiles_for_wilaya_by_statuses(
+                        db_path, wilaya_code, ["pending", "registered", "pre-registered"]
                     )
-                    if pending_profiles:
+                    if actionable_profiles:
                         logger.info(
-                            "Found %d pending profiles for wilaya %s — triggering auto-registration",
-                            len(pending_profiles),
+                            "Found %d actionable profiles for wilaya %s — triggering auto-registration",
+                            len(actionable_profiles),
                             wilaya_code,
                         )
-                        await notify_profile_owners(app, pending_profiles)
+                        await auto_submit_profiles(app, actionable_profiles)
                 except Exception:
                     logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
             else:
@@ -172,5 +172,19 @@ def start_scheduler(
         max_instances=1,
         misfire_grace_time=60,
     )
+
+    # 12-hour reminder for pre-registered profiles needing OTP verification
+    async def reminder_wrapper():
+        await remind_preregistered_profiles(app)
+
+    scheduler.add_job(
+        reminder_wrapper,
+        "interval",
+        hours=12,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
+    logger.info("Scheduler started: poll every %ss, pre-registered reminder every 12h", interval_s)
     return scheduler

@@ -1,22 +1,25 @@
 """Auto-registration flow triggered when the scheduler detects available quota.
 
-The bot sends a notification with a "Register Now" button.  When clicked, the
-user is walked through:  CAPTCHA #1 → Submit → OTP → CAPTCHA #2 → Verify.
-All profile data (NIN, CNIBE, phone, password, etc.) is pre-filled.
+Phase 1: Try all profiles concurrently (auto-CAPTCHA + submit).
+Phase 2: If IP-blocked or CAPTCHA fails, fall back to sequential + manual CAPTCHA.
+
+Successful submission secures a spot — OTP verification can be done later
+via /verifyotp.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import io
 import logging
 import time
 from typing import Any
 
-import ddddocr
 import httpx
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.ext import (
-    CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
@@ -24,6 +27,7 @@ from telegram.ext import (
 )
 
 from . import profile_db
+from .captcha_solver import CaptchaSolver, create_solvers
 from .registration import (
     _build_headers,
     _extract_error_message,
@@ -32,175 +36,28 @@ from .registration import (
 
 logger = logging.getLogger(__name__)
 
-try:
-    _ocr = ddddocr.DdddOcr(beta=True, show_ad=False)
-except TypeError:
-    _ocr = ddddocr.DdddOcr(beta=True)
+_primary_solver, _fallback_solver = create_solvers()
 
-# Conversation states
+# Conversation states for manual CAPTCHA fallback & OTP verification
 (
-    AUTO_CAPTCHA_1,
-    AUTO_OTP,
-    AUTO_CAPTCHA_2,
-) = range(3)
+    MANUAL_CAPTCHA,
+    VERIFY_OTP_CAPTCHA,
+) = range(2)
 
 _CAPTCHA_TTL_S = 300
 
-
-def _auto_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
-    if "auto_reg" not in context.user_data:
-        context.user_data["auto_reg"] = {}
-    return context.user_data["auto_reg"]
+# HTTP codes that signal IP/rate-limit blocking
+_IP_BLOCK_CODES = {429, 403}
 
 
-# ─── Scheduler trigger ────────────────────────────────────────────────────────
+# ─── CAPTCHA helpers ──────────────────────────────────────────────────────────
 
-async def notify_profile_owners(app, profiles: list[profile_db.Profile]) -> None:
-    """Called by the scheduler when quota is available.
-
-    Groups profiles by user and sends a notification with a Register button
-    for each qualifying profile (highest priority first per user).
-    """
-    # Group by user_id, keep only the first (highest-priority) profile per user
-    seen_users: set[int] = set()
-    for p in profiles:
-        if p.user_id in seen_users:
-            continue
-        seen_users.add(p.user_id)
-
-        try:
-            await profile_db.set_profile_status(
-                app.bot_data["db_path"], p.id, "registering"
-            )
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    text="🚀 Register Now",
-                    callback_data=f"auto_reg:{p.id}",
-                )
-            ]])
-            masked_nin = f"{p.nin[:4]}…{p.nin[-4:]}"
-            await app.bot.send_message(
-                chat_id=p.user_id,
-                text=(
-                    f"✅ *Quota available in {p.wilaya_name}!*\n\n"
-                    f"Profile `#{p.id}` ({masked_nin}) is ready to register.\n"
-                    "Tap the button below to start — you'll need to solve a CAPTCHA."
-                ),
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
-        except Exception:
-            logger.exception("Failed to notify user %s for profile %s", p.user_id, p.id)
-            # Reset status so it can be retried
-            await profile_db.set_profile_status(
-                app.bot_data["db_path"], p.id, "pending"
-            )
-
-
-# ─── Entry: user taps "Register Now" ──────────────────────────────────────────
-
-async def auto_reg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if not query:
-        return ConversationHandler.END
-    await query.answer()
-
-    profile_id = int((query.data or "").split(":", 1)[1])
-    db_path: str = context.application.bot_data["db_path"]
-    user_id = update.effective_user.id
-
-    profile = await profile_db.get_profile(db_path, profile_id, user_id)
-    if not profile:
-        await query.edit_message_text("❌ Profile not found.")
-        return ConversationHandler.END
-
-    if profile.status not in ("registering", "pending"):
-        await query.edit_message_text(
-            f"⚠️ Profile #{profile_id} status is *{profile.status}* — cannot register.",
-            parse_mode="Markdown",
-        )
-        return ConversationHandler.END
-
-    # Store profile data in session
-    state = _auto_state(context)
-    state.clear()
-    state["profile_id"] = profile.id
-    state["name"] = profile.name
-    state["nin"] = profile.nin
-    state["cnibe"] = profile.cnibe
-    state["phoneNumber"] = profile.phone
-    state["password"] = profile.password
-    state["wilayaId"] = profile.wilaya_id
-    state["communeCode"] = profile.commune_code
-    state["email"] = profile.email
-
-    await query.edit_message_text("⏳ Attempting automatic registration (solving CAPTCHA)...")
-
-    client = _get_http_client(context)
-    headers = _build_headers(context)
-    headers["Content-Type"] = "application/json"
-
-    for attempt in range(1, 4):
-        captcha_data = await _fetch_and_solve_captcha(context)
-        if not captcha_data:
-            continue
-            
-        captcha_id, solved_text, _ = captcha_data
-        
-        body = {
-            "nin": state["nin"],
-            "cnibe": state["cnibe"],
-            "phoneNumber": state["phoneNumber"],
-            "email": state.get("email", ""),
-            "password": state["password"],
-            "wilayaId": state["wilayaId"],
-            "communeCode": state["communeCode"],
-            "categoryId": 1,
-            "paymentMethod": "CASH",
-        }
-        
-        req_headers = headers.copy()
-        req_headers["X-Captcha-Id"] = captcha_id
-        req_headers["X-Captcha-Answer"] = solved_text
-        
-        try:
-            resp = await client.post("/api/v2/citizens/register", json=body, headers=req_headers)
-            
-            if 200 <= resp.status_code < 300 or resp.status_code == 425:
-                if resp.status_code == 425:
-                    try: msg = resp.json().get("message", "")
-                    except: msg = ""
-                    await query.edit_message_text(
-                        f"✅ *Auto-CAPTCHA solved!*\n\n⚠️ *Already pending*\n{msg}\n\n"
-                        f"Profile: *{state.get('name', 'Unknown')}*\n"
-                        f"Phone: `{state['phoneNumber']}`\n\n"
-                        "Please enter the *OTP* you received:",
-                        parse_mode="Markdown",
-                    )
-                else:
-                    await query.edit_message_text(
-                        "✅ *Auto-CAPTCHA solved!* Registration submitted!\n\n"
-                        f"Profile: *{state.get('name', 'Unknown')}*\n"
-                        f"Phone: `{state['phoneNumber']}`\n\n"
-                        "An OTP has been sent to your phone.\n"
-                        "Please enter the *OTP*:",
-                        parse_mode="Markdown",
-                    )
-                return AUTO_OTP
-            
-            error_detail = _extract_error_message(resp)
-            logger.warning("Auto-registration attempt %d failed: %s (HTTP %s)", attempt, error_detail, resp.status_code)
-        except Exception as exc:
-            logger.error("Auto-registration network error: %s", exc)
-
-    # If we fall through, 3 attempts failed.
-    await update.effective_chat.send_message("⚠️ Auto-CAPTCHA failed 3 times. Falling back to manual entry.")
-    return await _generate_captcha(update, context, captcha_key="captcha1")
-
-
-async def _fetch_and_solve_captcha(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, str, bytes] | None:
-    client = _get_http_client(context)
-    headers = _build_headers(context)
+async def _fetch_and_solve_captcha(
+    client: httpx.AsyncClient, headers: dict[str, str],
+    solver: CaptchaSolver | None = None,
+) -> tuple[str, str, bytes] | None:
+    """Fetch a CAPTCHA and solve it. Returns (id, answer, image_bytes) or None."""
+    used_solver = solver or _primary_solver
     try:
         resp = await client.get("/api/v1/captcha/generate", headers=headers)
         resp.raise_for_status()
@@ -209,295 +66,1024 @@ async def _fetch_and_solve_captcha(context: ContextTypes.DEFAULT_TYPE) -> tuple[
         image_uri = data["captchaImage"]
         b64 = image_uri.split(",", 1)[1] if "," in image_uri else image_uri
         image_bytes = base64.b64decode(b64)
-        
-        solved_text = _ocr.classification(image_bytes).upper()
+        solved_text = await used_solver.solve(image_bytes)
+        logger.info("CAPTCHA solved by %s: id=%s answer=%s", used_solver.name, captcha_id, solved_text)
         return captcha_id, solved_text, image_bytes
     except Exception as exc:
-        logger.error("Failed to fetch/solve captcha: %s", exc)
+        logger.error("Failed to fetch/solve captcha (%s): %s", used_solver.name, exc)
         return None
 
 
-# ─── CAPTCHA generation helper ────────────────────────────────────────────────
-
-async def _generate_captcha(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    *,
-    captcha_key: str,
-) -> int:
-    state = _auto_state(context)
-    client = _get_http_client(context)
-    headers = _build_headers(context)
-
+async def _fetch_captcha_raw(
+    client: httpx.AsyncClient, headers: dict[str, str]
+) -> tuple[str, bytes] | None:
+    """Fetch a CAPTCHA without solving. Returns (id, image_bytes) or None."""
     try:
         resp = await client.get("/api/v1/captcha/generate", headers=headers)
         resp.raise_for_status()
         data = resp.json()
+        captcha_id = data["captchaId"]
+        image_uri = data["captchaImage"]
+        b64 = image_uri.split(",", 1)[1] if "," in image_uri else image_uri
+        image_bytes = base64.b64decode(b64)
+        return captcha_id, image_bytes
     except Exception as exc:
-        logger.exception("Failed to generate CAPTCHA")
-        await update.effective_chat.send_message(
-            f"❌ CAPTCHA generation failed: {exc}\nUse /register to try manually."
+        logger.error("Failed to fetch captcha: %s", exc)
+        return None
+
+
+# ─── Single-profile submission (auto-CAPTCHA, up to 3 attempts) ───────────────
+
+async def _try_submit_profile(
+    profile: profile_db.Profile,
+    client: httpx.AsyncClient,
+    base_headers: dict[str, str],
+) -> tuple[profile_db.Profile, str, str]:
+    """Attempt to submit one profile with cascading CAPTCHA solvers.
+
+    Strategy:
+      Attempt 1: ddddocr  (free, ~0.05s)
+      Attempt 2: 2captcha (paid, ~6s) — different error profile
+      Attempt 3: 2captcha (paid, ~6s) — last resort
+
+    Returns (profile, outcome, detail) where outcome is one of:
+      "submitted"    — 2xx or 425 (spot secured)
+      "captcha_fail" — all attempts exhausted
+      "ip_blocked"   — server returned 429/403
+      "error"        — other server error
+    """
+    body = {
+        "nin": profile.nin,
+        "cnibe": profile.cnibe,
+        "phoneNumber": profile.phone,
+        "email": profile.email or "",
+        "password": profile.password,
+        "wilayaId": profile.wilaya_id,
+        "communeCode": profile.commune_code,
+        "categoryId": 1,
+        "paymentMethod": profile.payment_method,
+    }
+
+    # Build attempt list: ddddocr first, then 2captcha fallback
+    solvers_to_try = [_primary_solver]
+    if _fallback_solver:
+        solvers_to_try.append(_fallback_solver)
+        solvers_to_try.append(_fallback_solver)
+    else:
+        # No fallback — just retry with primary
+        solvers_to_try.append(_primary_solver)
+        solvers_to_try.append(_primary_solver)
+
+    for attempt, solver in enumerate(solvers_to_try, 1):
+        solved = await _fetch_and_solve_captcha(client, base_headers, solver=solver)
+        if not solved:
+            continue
+
+        captcha_id, answer, _ = solved
+        req_headers = {**base_headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
+
+        try:
+            resp = await client.post("/api/v2/citizens/register", json=body, headers=req_headers)
+        except Exception as exc:
+            logger.error("Submit network error profile=%s: %s", profile.id, exc)
+            return profile, "error", str(exc)
+
+        logger.info(
+            "Submit profile=%s attempt=%d solver=%s status=%s body=%s",
+            profile.id, attempt, solver.name, resp.status_code, resp.text,
         )
-        await _reset_profile_status(context, "pending")
-        return ConversationHandler.END
 
-    state[f"{captcha_key}_id"] = data["captchaId"]
-    state[f"{captcha_key}_ts"] = time.time()
-    expires_in = data.get("expiresIn", _CAPTCHA_TTL_S)
-    logger.info("CAPTCHA generated (%s): id=%s expiresIn=%ss", captcha_key, data["captchaId"], expires_in)
+        if 200 <= resp.status_code < 300 or resp.status_code == 425:
+            return profile, "submitted", resp.text
 
-    # Decode image
-    image_uri: str = data["captchaImage"]
-    b64 = image_uri.split(",", 1)[1] if "," in image_uri else image_uri
-    image_bytes = base64.b64decode(b64)
+        if resp.status_code in _IP_BLOCK_CODES:
+            return profile, "ip_blocked", _extract_error_message(resp)
 
-    step = "1" if captcha_key == "captcha1" else "3"
-    await context.bot.send_photo(
-        chat_id=update.effective_chat.id,
+        # Rejected (likely wrong CAPTCHA) — cascade to next solver
+        logger.warning(
+            "Profile %s attempt %d (%s) rejected: %s",
+            profile.id, attempt, solver.name, _extract_error_message(resp),
+        )
+
+    return profile, "captcha_fail", "All CAPTCHA attempts exhausted"
+
+
+# ─── Login + Order for registered profiles ────────────────────────────────────
+
+async def _try_login_and_order(
+    profile: profile_db.Profile,
+    client: httpx.AsyncClient,
+    base_headers: dict[str, str],
+) -> tuple[profile_db.Profile, str, str]:
+    """Login with a registered profile and submit an order.
+
+    Strategy: 2captcha first (paid, reliable), then ddddocr fallback.
+    Returns (profile, outcome, detail) where outcome is one of:
+      "ordered"      — order created successfully
+      "captcha_fail" — all CAPTCHA attempts exhausted
+      "login_fail"   — login failed after all attempts
+      "order_fail"   — logged in but order creation failed
+      "error"        — network or unexpected error
+    """
+    # Build solver list: 2captcha first, then ddddocr fallback
+    solvers_to_try: list[CaptchaSolver] = []
+    if _fallback_solver:  # 2captcha is the "fallback" in the module but we want it first here
+        solvers_to_try.append(_fallback_solver)
+    solvers_to_try.append(_primary_solver)  # ddddocr
+    solvers_to_try.append(_primary_solver)  # retry ddddocr
+
+    # ── Step 1: Login ──
+    access_token = None
+    last_login_error = ""
+
+    for attempt, solver in enumerate(solvers_to_try, 1):
+        solved = await _fetch_and_solve_captcha(client, base_headers, solver=solver)
+        if not solved:
+            continue
+
+        captcha_id, answer, _ = solved
+        login_headers = {
+            **base_headers,
+            "X-Captcha-Id": captcha_id,
+            "X-Captcha-Answer": answer,
+        }
+        login_body = {
+            "nin": profile.nin,
+            "password": profile.password,
+            "deviceInfo": "WEB_APP",
+            "sessionType": "WEB",
+        }
+
+        try:
+            resp = await client.post("/api/v1/citizens/login", json=login_body, headers=login_headers)
+        except Exception as exc:
+            logger.error("Login network error profile=%s: %s", profile.id, exc)
+            return profile, "error", str(exc)
+
+        logger.info(
+            "Login profile=%s attempt=%d solver=%s status=%s body=%s",
+            profile.id, attempt, solver.name, resp.status_code, resp.text,
+        )
+
+        if 200 <= resp.status_code < 300:
+            access_token = resp.json().get("token")
+            if access_token:
+                break
+            last_login_error = "No token in response"
+        else:
+            last_login_error = _extract_error_message(resp)
+            logger.warning(
+                "Login profile %s attempt %d (%s) failed: %s",
+                profile.id, attempt, solver.name, last_login_error,
+            )
+
+    if not access_token:
+        return profile, "login_fail", f"Login failed: {last_login_error}"
+
+    # ── Step 2: Submit order ──
+    order_headers = {
+        **base_headers,
+        "Authorization": f"Bearer {access_token}",
+        "Referer": "https://adhahi.dz/activation",
+        "Origin": "https://adhahi.dz",
+    }
+    order_body = {
+        "wilayaId": profile.wilaya_id,
+        "communeCode": profile.commune_code,
+        "categoryId": 1,
+        "paymentMethod": profile.payment_method,
+    }
+
+    try:
+        resp = await client.post("/api/v1/orders", json=order_body, headers=order_headers)
+    except Exception as exc:
+        logger.error("Order network error profile=%s: %s", profile.id, exc)
+        return profile, "error", str(exc)
+
+    logger.info(
+        "Order profile=%s status=%s body=%s",
+        profile.id, resp.status_code, resp.text,
+    )
+
+    if 200 <= resp.status_code < 300:
+        return profile, "ordered", resp.text
+
+    return profile, "order_fail", _extract_error_message(resp)
+
+
+# ─── Pre-registered reminder (called by 12h scheduler) ────────────────────────
+
+async def remind_preregistered_profiles(app) -> None:
+    """Send reminders to users with pre-registered profiles to verify OTP."""
+    db_path: str = app.bot_data.get("db_path", "")
+    if not db_path:
+        return
+
+    profiles = await profile_db.get_all_profiles_by_status(db_path, "pre-registered")
+    if not profiles:
+        return
+
+    # Group by user
+    user_profiles: dict[int, list[profile_db.Profile]] = {}
+    for p in profiles:
+        user_profiles.setdefault(p.user_id, []).append(p)
+
+    for user_id, profs in user_profiles.items():
+        lines = ["🔔 *OTP Verification Reminder*\n"]
+        for p in profs:
+            masked = f"{p.nin[:4]}…{p.nin[-4:]}"
+            lines.append(f"  • *{p.name or masked}* (`{p.phone}`)")
+        lines.append(
+            "\nThese profiles are pre-registered but not yet verified.\n"
+            "Use /verifyotp to complete verification so they're ready "
+            "to snatch an order when quota opens!"
+        )
+        try:
+            await app.bot.send_message(
+                chat_id=user_id,
+                text="\n".join(lines),
+                parse_mode="Markdown",
+            )
+            logger.info("Sent pre-registered reminder to user %s (%d profiles)", user_id, len(profs))
+        except Exception:
+            logger.exception("Failed to send reminder to user %s", user_id)
+
+
+# ─── Scheduler entry point ────────────────────────────────────────────────────
+
+async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
+    """Called by the scheduler when quota is available.
+
+    Routes each profile based on status:
+      - pending     → registration flow (captcha + submit + OTP request)
+      - registered  → login + order flow
+      - pre-registered / ordered → skipped (handled separately)
+    """
+    db_path: str = app.bot_data["db_path"]
+    api_client = app.bot_data.get("api_client")
+    if not api_client:
+        return
+
+    client: httpx.AsyncClient = api_client._client  # noqa: SLF001
+    base_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+        "Accept": "application/json",
+        "Referer": "https://adhahi.dz/register",
+        "Content-Type": "application/json",
+    }
+    # Add session cookies
+    parts = [f"{n}={v}" for n, v in client.cookies.items()]
+    if parts:
+        base_headers["Cookie"] = "; ".join(parts)
+
+    # Split by status
+    pending_profiles = [p for p in profiles if p.status == "pending"]
+    registered_profiles = [p for p in profiles if p.status == "registered"]
+    preregistered_profiles = [p for p in profiles if p.status == "pre-registered"]
+
+    # ── Handle pending profiles (existing registration flow) ──
+    if pending_profiles:
+        user_pending: dict[int, list[profile_db.Profile]] = {}
+        for p in pending_profiles:
+            user_pending.setdefault(p.user_id, []).append(p)
+
+        for user_id, user_profs in user_pending.items():
+            for p in user_profs:
+                await profile_db.set_profile_status(db_path, p.id, "registering")
+            try:
+                await _process_user_profiles(app, user_id, user_profs, client, base_headers, db_path)
+            except Exception:
+                logger.exception("Auto-registration failed for user %s", user_id)
+                for p in user_profs:
+                    await profile_db.set_profile_status(db_path, p.id, "pending")
+
+    # ── Handle registered profiles (login + order flow) ──
+    if registered_profiles:
+        await _process_registered_profiles(app, registered_profiles, client, base_headers, db_path)
+
+    # ── Handle pre-registered profiles (resend OTP + urgent notify, non-blocking) ──
+    if preregistered_profiles:
+        await _nudge_preregistered_profiles(app, preregistered_profiles, client, base_headers)
+
+
+async def _nudge_preregistered_profiles(
+    app,
+    profiles: list[profile_db.Profile],
+    client: httpx.AsyncClient,
+    base_headers: dict[str, str],
+) -> None:
+    """Resend OTP for pre-registered profiles and urgently notify users.
+
+    This is fire-and-forget — we resend the OTP and tell the user to verify,
+    but we never block waiting for their response.
+    """
+    for profile in profiles:
+        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+        user_id = profile.user_id
+
+        # Try to resend OTP
+        headers = {**base_headers, "Referer": "https://adhahi.dz/activation", "Origin": "https://adhahi.dz"}
+        otp_sent = False
+        try:
+            resp = await client.post(
+                "/api/v1/citizens/resend-otp",
+                json={"nin": profile.nin},
+                headers=headers,
+            )
+            if 200 <= resp.status_code < 300:
+                otp_sent = True
+                logger.info("OTP resent for pre-registered profile %s", profile.id)
+            else:
+                logger.warning(
+                    "OTP resend failed for profile %s: HTTP %s %s",
+                    profile.id, resp.status_code, resp.text,
+                )
+        except Exception:
+            logger.exception("OTP resend network error for profile %s", profile.id)
+
+        # Notify user urgently — don't wait for response
+        try:
+            if otp_sent:
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"🚨 *QUOTA IS OPEN — Verify NOW!*\n\n"
+                        f"Profile: *{profile.name or masked}*\n"
+                        f"Phone: `{profile.phone}`\n\n"
+                        "An OTP has been resent to your phone.\n"
+                        "Use /verifyotp *immediately* to complete verification "
+                        "and place your order before quota runs out!"
+                    ),
+                    parse_mode="Markdown",
+                )
+            else:
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"🚨 *QUOTA IS OPEN — Verify NOW!*\n\n"
+                        f"Profile: *{profile.name or masked}*\n"
+                        f"Phone: `{profile.phone}`\n\n"
+                        "⚠️ Failed to resend OTP. Try /verifyotp and type `resend` "
+                        "to request a new OTP manually."
+                    ),
+                    parse_mode="Markdown",
+                )
+        except Exception:
+            logger.exception("Failed to send urgent nudge to user %s", user_id)
+
+
+async def _process_registered_profiles(
+    app,
+    profiles: list[profile_db.Profile],
+    client: httpx.AsyncClient,
+    base_headers: dict[str, str],
+    db_path: str,
+) -> None:
+    """Handle registered profiles: login + submit order concurrently."""
+    tasks = [_try_login_and_order(p, client, base_headers) for p in profiles]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error("Unexpected error in login+order: %s", result)
+            continue
+
+        profile, outcome, detail = result
+        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+        user_id = profile.user_id
+
+        if outcome == "ordered":
+            await profile_db.set_profile_status(db_path, profile.id, "ordered")
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"🐑 *Order placed!*\n\n"
+                    f"Profile: *{profile.name or masked}*\n"
+                    f"Phone: `{profile.phone}`\n\n"
+                    "Your order has been submitted successfully!"
+                ),
+                parse_mode="Markdown",
+            )
+        elif outcome == "order_fail":
+            logger.error("Order failed for profile %s: %s", profile.id, detail)
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"❌ *Order failed for {profile.name or masked}*\n\n"
+                    f"Error: {detail}\n\n"
+                    "The profile is still registered. Will retry next time quota is available."
+                ),
+                parse_mode="Markdown",
+            )
+        elif outcome == "login_fail":
+            logger.error("Login failed for profile %s: %s", profile.id, detail)
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"❌ *Login failed for {profile.name or masked}*\n\n"
+                    f"Error: {detail}\n\n"
+                    "Will retry next time quota is available."
+                ),
+                parse_mode="Markdown",
+            )
+        else:
+            logger.error("Login+order error for profile %s: %s", profile.id, detail)
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ Error for profile *{profile.name or masked}*:\n{detail}",
+                parse_mode="Markdown",
+            )
+
+
+async def _process_user_profiles(
+    app,
+    user_id: int,
+    profiles: list[profile_db.Profile],
+    client: httpx.AsyncClient,
+    base_headers: dict[str, str],
+    db_path: str,
+) -> None:
+    """Phase 1: concurrent.  Phase 2: sequential fallback."""
+
+    # ── Phase 1: Concurrent ──
+    tasks = [_try_submit_profile(p, client, base_headers) for p in profiles]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    remaining: list[profile_db.Profile] = []
+    ip_blocked = False
+
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error("Unexpected error in concurrent submit: %s", result)
+            continue
+
+        profile, outcome, detail = result
+
+        if outcome == "submitted":
+            await profile_db.set_profile_status(db_path, profile.id, "submitted")
+            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"✅ *Registration submitted!*\n\n"
+                    f"Profile: *{profile.name or masked}*\n"
+                    f"Phone: `{profile.phone}`\n\n"
+                    "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
+                ),
+                parse_mode="Markdown",
+            )
+        elif outcome == "ip_blocked":
+            ip_blocked = True
+            remaining.append(profile)
+        elif outcome == "captcha_fail":
+            remaining.append(profile)
+        else:
+            await profile_db.set_profile_status(db_path, profile.id, "failed")
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
+                parse_mode="Markdown",
+            )
+
+    if not remaining:
+        return
+
+    # ── Phase 2: Sequential fallback ──
+    if ip_blocked:
+        logger.info("IP block detected for user %s — switching to sequential", user_id)
+
+    # Sort remaining by priority
+    remaining.sort(key=lambda p: p.priority)
+
+    for profile in remaining:
+        p_result = await _try_submit_profile(profile, client, base_headers)
+        _, outcome, detail = p_result
+
+        if outcome == "submitted":
+            await profile_db.set_profile_status(db_path, profile.id, "submitted")
+            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"✅ *Registration submitted!*\n\n"
+                    f"Profile: *{profile.name or masked}*\n"
+                    f"Phone: `{profile.phone}`\n\n"
+                    "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
+                ),
+                parse_mode="Markdown",
+            )
+        elif outcome == "captcha_fail":
+            # Queue manual CAPTCHA for user
+            await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)
+        else:
+            await profile_db.set_profile_status(db_path, profile.id, "failed")
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
+                parse_mode="Markdown",
+            )
+
+
+async def _send_manual_captcha(
+    app, user_id: int, profile: profile_db.Profile,
+    client: httpx.AsyncClient, base_headers: dict[str, str], db_path: str,
+) -> None:
+    """Send a CAPTCHA image to the user for manual solving.
+
+    Stores the pending profile + captcha info in bot_data so the
+    ConversationHandler can pick it up.
+    """
+    captcha = await _fetch_captcha_raw(client, base_headers)
+    if not captcha:
+        await profile_db.set_profile_status(db_path, profile.id, "pending")
+        await app.bot.send_message(
+            chat_id=user_id,
+            text=f"⚠️ Could not generate CAPTCHA for profile *{profile.name}*. Will retry next cycle.",
+            parse_mode="Markdown",
+        )
+        return
+
+    captcha_id, image_bytes = captcha
+
+    # Store pending manual captcha in bot_data keyed by user_id
+    pending_key = f"manual_captcha_{user_id}"
+    app.bot_data[pending_key] = {
+        "profile": profile,
+        "captcha_id": captcha_id,
+        "captcha_ts": time.time(),
+    }
+
+    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+    await app.bot.send_photo(
+        chat_id=user_id,
         photo=io.BytesIO(image_bytes),
         caption=(
-            f"🔐 *CAPTCHA (step {step})*\n\n"
-            "Type your answer below.\n"
-            f"_Expires in {expires_in} seconds._"
+            f"🔐 *Manual CAPTCHA needed*\n\n"
+            f"Profile: *{profile.name or masked}*\n"
+            f"Phone: `{profile.phone}`\n\n"
+            "Auto-solve failed. Please type the CAPTCHA answer below.\n"
+            f"_Expires in {_CAPTCHA_TTL_S} seconds._"
         ),
         parse_mode="Markdown",
     )
 
-    if captcha_key == "captcha1":
-        return AUTO_CAPTCHA_1
-    return AUTO_CAPTCHA_2
 
+# ─── Manual CAPTCHA conversation handler ──────────────────────────────────────
 
-# ─── Step 1: Collect CAPTCHA #1 → Submit registration ─────────────────────────
+async def manual_captcha_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Triggered when user sends text while a manual CAPTCHA is pending."""
+    user_id = update.effective_user.id
+    pending_key = f"manual_captcha_{user_id}"
+    pending = context.application.bot_data.get(pending_key)
 
-async def collect_captcha_1(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    state = _auto_state(context)
+    if not pending:
+        # No pending captcha — ignore
+        return ConversationHandler.END
+
+    profile: profile_db.Profile = pending["profile"]
+    captcha_id: str = pending["captcha_id"]
+    captcha_ts: float = pending["captcha_ts"]
+    db_path: str = context.application.bot_data["db_path"]
 
     # Check expiry
-    if time.time() - state.get("captcha1_ts", 0) > _CAPTCHA_TTL_S:
-        await update.message.reply_text("⏰ CAPTCHA expired. Generating a new one…")
-        return await _generate_captcha(update, context, captcha_key="captcha1")
+    if time.time() - captcha_ts > _CAPTCHA_TTL_S:
+        # Generate a new one
+        client = _get_http_client(context)
+        headers = _build_headers(context)
+        new_captcha = await _fetch_captcha_raw(client, headers)
+        if not new_captcha:
+            await update.message.reply_text("❌ Failed to regenerate CAPTCHA. Will retry next cycle.")
+            await profile_db.set_profile_status(db_path, profile.id, "pending")
+            context.application.bot_data.pop(pending_key, None)
+            return ConversationHandler.END
 
-    state["captcha1_answer"] = update.message.text.strip()
+        new_id, new_bytes = new_captcha
+        pending["captcha_id"] = new_id
+        pending["captcha_ts"] = time.time()
+
+        await update.message.reply_text("⏰ Previous CAPTCHA expired. Here's a new one:")
+        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=io.BytesIO(new_bytes),
+            caption=(
+                f"🔐 *CAPTCHA* for *{profile.name or masked}*\n"
+                "Type your answer below."
+            ),
+            parse_mode="Markdown",
+        )
+        return MANUAL_CAPTCHA
+
+    answer = update.message.text.strip()
     await update.message.reply_text("⏳ Submitting registration…")
 
-    # Submit registration
+    # Submit
     body = {
-        "nin": state["nin"],
-        "cnibe": state["cnibe"],
-        "phoneNumber": state["phoneNumber"],
-        "email": state.get("email", ""),
-        "password": state["password"],
-        "wilayaId": state["wilayaId"],
-        "communeCode": state["communeCode"],
+        "nin": profile.nin,
+        "cnibe": profile.cnibe,
+        "phoneNumber": profile.phone,
+        "email": profile.email or "",
+        "password": profile.password,
+        "wilayaId": profile.wilaya_id,
+        "communeCode": profile.commune_code,
         "categoryId": 1,
-        "paymentMethod": "CASH",
+        "paymentMethod": profile.payment_method,
     }
 
+    client = _get_http_client(context)
     headers = _build_headers(context)
     headers["Content-Type"] = "application/json"
-    headers["X-Captcha-Id"] = state["captcha1_id"]
-    headers["X-Captcha-Answer"] = state["captcha1_answer"]
-
-    client = _get_http_client(context)
+    headers["X-Captcha-Id"] = captcha_id
+    headers["X-Captcha-Answer"] = answer
 
     try:
         resp = await client.post("/api/v2/citizens/register", json=body, headers=headers)
     except Exception as exc:
-        logger.error("Auto-registration network error: %s", exc)
+        logger.error("Manual submit network error: %s", exc)
         await update.message.reply_text(f"❌ Network error: `{exc}`", parse_mode="Markdown")
-        await _reset_profile_status(context, "failed")
+        await profile_db.set_profile_status(db_path, profile.id, "pending")
+        context.application.bot_data.pop(pending_key, None)
         return ConversationHandler.END
 
-    logger.info("Auto-registration response: status=%s body=%s", resp.status_code, resp.text)
+    logger.info("Manual submit response: status=%s body=%s", resp.status_code, resp.text)
 
     if 200 <= resp.status_code < 300 or resp.status_code == 425:
-        if resp.status_code == 425:
-            try:
-                msg = resp.json().get("message", "")
-            except Exception:
-                msg = ""
-            await update.message.reply_text(
-                f"⚠️ *Already pending*\n{msg}\n\n"
-                f"Profile: *{state.get('name', 'Unknown')}*\n"
-                f"Phone: `{state['phoneNumber']}`\n\n"
-                "Please enter the *OTP* you received:",
-                parse_mode="Markdown",
-            )
-        else:
-            await update.message.reply_text(
-                "✅ Registration submitted!\n\n"
-                f"Profile: *{state.get('name', 'Unknown')}*\n"
-                f"Phone: `{state['phoneNumber']}`\n\n"
-                "An OTP has been sent to your phone.\n"
-                "Please enter the *OTP*:",
-                parse_mode="Markdown",
-            )
-        return AUTO_OTP
-
-    # Error
-    error_detail = _extract_error_message(resp)
-    logger.error("Auto-registration failed: status=%s body=%s", resp.status_code, resp.text)
-    await update.message.reply_text(
-        f"❌ Registration failed (HTTP {resp.status_code}).\n\nError: {error_detail}"
-    )
-    await _reset_profile_status(context, "failed")
-    return ConversationHandler.END
-
-
-# ─── Step 2: Collect OTP → Generate CAPTCHA #2 ────────────────────────────────
-
-async def collect_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    state = _auto_state(context)
-    state["otp"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "✅ OTP recorded.\n\n⏳ Attempting to verify automatically (solving CAPTCHA)..."
-    )
-    
-    client = _get_http_client(context)
-    headers = _build_headers(context)
-    headers["Content-Type"] = "application/json"
-    
-    for attempt in range(1, 4):
-        captcha_data = await _fetch_and_solve_captcha(context)
-        if not captcha_data:
-            continue
-            
-        captcha_id, solved_text, _ = captcha_data
-        
-        body = {
-            "nin": state["nin"],
-            "otp": state["otp"],
-        }
-        
-        req_headers = headers.copy()
-        req_headers["X-Captcha-Id"] = captcha_id
-        req_headers["X-Captcha-Answer"] = solved_text
-        
-        try:
-            resp = await client.post("/api/v1/citizens/verify-otp", json=body, headers=req_headers)
-            
-            if 200 <= resp.status_code < 300:
-                db_path: str = context.application.bot_data["db_path"]
-                profile_id = state.get("profile_id")
-                if profile_id:
-                    await profile_db.set_profile_status(db_path, profile_id, "registered")
-                await update.message.reply_text(
-                    "🎉 *Registration Complete!*\n\n"
-                    "Congratulations — your registration has been verified!",
-                    parse_mode="Markdown",
-                )
-                context.user_data.pop("auto_reg", None)
-                return ConversationHandler.END
-            
-            error_detail = _extract_error_message(resp)
-            logger.warning("OTP verification attempt %d failed: %s", attempt, error_detail)
-        except Exception as exc:
-            logger.error("OTP verification network error: %s", exc)
-
-    await update.message.reply_text("⚠️ Auto-CAPTCHA failed 3 times. Falling back to manual entry.")
-    return await _generate_captcha(update, context, captcha_key="captcha2")
-
-
-# ─── Step 3: Collect CAPTCHA #2 → Submit OTP verification ─────────────────────
-
-async def collect_captcha_2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    state = _auto_state(context)
-
-    # Check expiry
-    if time.time() - state.get("captcha2_ts", 0) > _CAPTCHA_TTL_S:
-        await update.message.reply_text("⏰ CAPTCHA expired. Generating a new one…")
-        return await _generate_captcha(update, context, captcha_key="captcha2")
-
-    state["captcha2_answer"] = update.message.text.strip()
-    await update.message.reply_text("⏳ Verifying OTP…")
-
-    body = {
-        "nin": state["nin"],
-        "otp": state["otp"],
-    }
-
-    headers = _build_headers(context)
-    headers["Content-Type"] = "application/json"
-    headers["X-Captcha-Id"] = state["captcha2_id"]
-    headers["X-Captcha-Answer"] = state["captcha2_answer"]
-
-    client = _get_http_client(context)
-
-    try:
-        resp = await client.post("/api/v1/citizens/verify-otp", json=body, headers=headers)
-    except Exception as exc:
-        logger.error("OTP verification network error: %s", exc)
-        await update.message.reply_text(f"❌ Network error: `{exc}`", parse_mode="Markdown")
-        await _reset_profile_status(context, "failed")
-        return ConversationHandler.END
-
-    logger.info("OTP verification response: status=%s body=%s", resp.status_code, resp.text)
-
-    db_path: str = context.application.bot_data["db_path"]
-    profile_id = state.get("profile_id")
-
-    if 200 <= resp.status_code < 300:
-        if profile_id:
-            await profile_db.set_profile_status(db_path, profile_id, "registered")
+        await profile_db.set_profile_status(db_path, profile.id, "submitted")
         await update.message.reply_text(
-            "🎉 *Registration Complete!*\n\n"
-            "Congratulations — your registration has been verified!",
+            f"✅ *Registration submitted for {profile.name}!*\n\n"
+            "Your spot is secured! Use /verifyotp when ready.",
             parse_mode="Markdown",
         )
     else:
         error_detail = _extract_error_message(resp)
-        logger.error("OTP verification failed: status=%s body=%s", resp.status_code, resp.text)
-        if profile_id:
-            await profile_db.set_profile_status(db_path, profile_id, "failed")
+        await profile_db.set_profile_status(db_path, profile.id, "failed")
         await update.message.reply_text(
-            f"❌ OTP verification failed (HTTP {resp.status_code}).\n\nError: {error_detail}"
+            f"❌ Registration failed (HTTP {resp.status_code}).\n\nError: {error_detail}"
         )
 
-    # Clean up
-    context.user_data.pop("auto_reg", None)
+    context.application.bot_data.pop(pending_key, None)
     return ConversationHandler.END
 
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# ─── Post-OTP flow: create order + fetch receipt ─────────────────────────────
 
-async def _reset_profile_status(context: ContextTypes.DEFAULT_TYPE, status: str) -> None:
-    state = context.user_data.get("auto_reg", {})
-    profile_id = state.get("profile_id")
-    if profile_id:
-        db_path: str = context.application.bot_data["db_path"]
-        await profile_db.set_profile_status(db_path, profile_id, status)
-    context.user_data.pop("auto_reg", None)
+async def _complete_post_otp_flow(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    profile: profile_db.Profile,
+    verify_response: httpx.Response,
+    db_path: str,
+) -> None:
+    """Handle the post-OTP-verification flow: extract token, create order, fetch receipt."""
+    # Extract access token
+    try:
+        verify_data = verify_response.json()
+        access_token = verify_data.get("accessToken", "")
+    except Exception:
+        access_token = ""
 
+    if not access_token:
+        await profile_db.set_profile_status(db_path, profile.id, "registered")
+        await update.message.reply_text(
+            "✅ OTP verified, but no access token received.\n"
+            "You may need to complete the order manually.",
+        )
+        return
 
-async def auto_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await _reset_profile_status(context, "pending")
-    await update.effective_message.reply_text(
-        "Auto-registration cancelled. Profile reset to pending."
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+    headers["Content-Type"] = "application/json"
+    headers["Authorization"] = f"Bearer {access_token}"
+    headers["Referer"] = "https://adhahi.dz/activation"
+    headers["Origin"] = "https://adhahi.dz"
+
+    # ── Create order ──
+    order_body = {
+        "wilayaId": profile.wilaya_id,
+        "communeCode": profile.commune_code,
+        "categoryId": 1,
+        "paymentMethod": profile.payment_method,
+    }
+
+    await update.message.reply_text("⏳ Creating order…")
+
+    try:
+        resp = await client.post("/api/v1/orders", json=order_body, headers=headers)
+    except Exception as exc:
+        logger.error("Order creation network error: %s", exc)
+        await update.message.reply_text(
+            f"✅ OTP verified but order creation failed.\n\n"
+            f"❌ Network error: `{exc}`\n\n"
+            f"🔑 Access Token:\n`{access_token}`",
+            parse_mode="Markdown",
+        )
+        await profile_db.set_profile_status(db_path, profile.id, "registered")
+        return
+
+    logger.info("Order creation response: status=%s body=%s", resp.status_code, resp.text)
+
+    if resp.status_code >= 400:
+        error_detail = _extract_error_message(resp)
+        await update.message.reply_text(
+            f"✅ OTP verified but order creation failed (HTTP {resp.status_code}).\n\n"
+            f"❌ Error: {error_detail}\n\n"
+            f"🔑 Access Token:\n`{access_token}`",
+            parse_mode="Markdown",
+        )
+        await profile_db.set_profile_status(db_path, profile.id, "registered")
+        return
+
+    # Order created successfully
+    await profile_db.set_profile_status(db_path, profile.id, "ordered")
+
+    try:
+        order_text = json.dumps(resp.json(), indent=2, ensure_ascii=False)
+    except Exception:
+        order_text = resp.text
+
+    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+    await update.message.reply_text(
+        f"🎉 *Order Created Successfully!*\n\n"
+        f"Profile: *{profile.name or masked}*\n"
+        f"```\n{order_text[:3000]}\n```",
+        parse_mode="Markdown",
     )
+
+    # ── Fetch my-orders ──
+    headers["Referer"] = "https://adhahi.dz/user/confirmation"
+    try:
+        resp = await client.get(
+            "/api/v1/orders/my-orders?page=0&size=10", headers=headers,
+        )
+        if 200 <= resp.status_code < 300:
+            orders_data = resp.json()
+            orders_text = json.dumps(orders_data, indent=2, ensure_ascii=False)
+            await update.message.reply_text(
+                f"📋 *My Orders:*\n```\n{orders_text[:3000]}\n```",
+                parse_mode="Markdown",
+            )
+
+            # ── Fetch receipt if available ──
+            recent = orders_data.get("recentOrders", [])
+            if recent:
+                receipt_num = recent[0].get("orderReceiptNumber", "")
+                if receipt_num:
+                    try:
+                        resp = await client.get(
+                            f"/api/v1/receipts/{receipt_num}/data", headers=headers,
+                        )
+                        if 200 <= resp.status_code < 300:
+                            receipt_text = json.dumps(
+                                resp.json(), indent=2, ensure_ascii=False,
+                            )
+                            await update.message.reply_text(
+                                f"🧾 *Receipt ({receipt_num}):*\n"
+                                f"```\n{receipt_text[:3000]}\n```",
+                                parse_mode="Markdown",
+                            )
+                        else:
+                            logger.warning(
+                                "Receipt fetch failed: status=%s body=%s",
+                                resp.status_code, resp.text,
+                            )
+                    except Exception as exc:
+                        logger.error("Receipt fetch error: %s", exc)
+        else:
+            logger.warning(
+                "My-orders fetch failed: status=%s body=%s",
+                resp.status_code, resp.text,
+            )
+    except Exception as exc:
+        logger.error("My-orders fetch error: %s", exc)
+
+
+# ─── /verifyotp command ───────────────────────────────────────────────────────
+
+async def verifyotp_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """List submitted profiles and let user pick one to verify OTP."""
+    user_id = update.effective_user.id
+    db_path: str = context.application.bot_data["db_path"]
+
+    submitted = await profile_db.get_profiles_by_status(db_path, user_id, "submitted")
+    pre_registered = await profile_db.get_profiles_by_status(db_path, user_id, "pre-registered")
+    submitted = submitted + pre_registered
+    if not submitted:
+        await update.message.reply_text("No profiles awaiting OTP verification.")
+        return ConversationHandler.END
+
+    if len(submitted) == 1:
+        # Jump straight to OTP prompt
+        context.user_data["verify_otp"] = {"profile": submitted[0]}
+        masked = f"{submitted[0].nin[:4]}…{submitted[0].nin[-4:]}"
+        await update.message.reply_text(
+            f"📱 *OTP Verification*\n\n"
+            f"Profile: *{submitted[0].name or masked}*\n"
+            f"Phone: `{submitted[0].phone}`\n\n"
+            "Enter the OTP you received.\n"
+            "If your OTP expired, type `resend` to get a new one.",
+            parse_mode="Markdown",
+        )
+        return VERIFY_OTP_CAPTCHA
+
+    # Multiple — list them
+    lines = ["📱 *OTP Verification*\n\nMultiple profiles awaiting verification:\n"]
+    for p in submitted:
+        masked = f"{p.nin[:4]}…{p.nin[-4:]}"
+        lines.append(f"  `{p.id}` — *{p.name or masked}* ({p.phone})")
+    lines.append("\nReply with the profile ID number:")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    context.user_data["verify_otp"] = {"profiles": submitted}
+    return VERIFY_OTP_CAPTCHA
+
+
+async def verifyotp_handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle OTP input or profile selection for verification."""
+    state = context.user_data.get("verify_otp", {})
+    db_path: str = context.application.bot_data["db_path"]
+    text = update.message.text.strip()
+
+    # Handle resend
+    if text.lower() == "resend":
+        profile = state.get("profile")
+        if not profile:
+            await update.message.reply_text("No profile selected. Please start again with /verifyotp.")
+            return ConversationHandler.END
+
+        client = _get_http_client(context)
+        headers = _build_headers(context)
+        headers["Content-Type"] = "application/json"
+        try:
+            resp = await client.post(
+                "/api/v1/citizens/resend-otp",
+                json={"nin": profile.nin},
+                headers=headers,
+            )
+            if 200 <= resp.status_code < 300:
+                masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                await update.message.reply_text(
+                    f"✅ OTP resent for *{profile.name or masked}* (`{profile.phone}`)!\n"
+                    "Enter the new OTP:",
+                    parse_mode="Markdown",
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ Failed to resend OTP (HTTP {resp.status_code}). Try again later."
+                )
+        except Exception as exc:
+            await update.message.reply_text(f"❌ Network error: `{exc}`", parse_mode="Markdown")
+        return VERIFY_OTP_CAPTCHA
+
+    # If we need profile selection first
+    if "profiles" in state and "profile" not in state:
+        try:
+            pid = int(text)
+        except ValueError:
+            await update.message.reply_text("Please enter a valid profile ID number:")
+            return VERIFY_OTP_CAPTCHA
+
+        profile = next((p for p in state["profiles"] if p.id == pid), None)
+        if not profile:
+            await update.message.reply_text("Profile not found. Try again:")
+            return VERIFY_OTP_CAPTCHA
+
+        state["profile"] = profile
+        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+        await update.message.reply_text(
+            f"Selected: *{profile.name or masked}*\n"
+            f"Phone: `{profile.phone}`\n\n"
+            "Enter the OTP sent to this phone (or type `resend` for a new one):",
+            parse_mode="Markdown",
+        )
+        return VERIFY_OTP_CAPTCHA
+
+    # We have a profile and this is the OTP
+    profile = state.get("profile")
+    if not profile:
+        await update.message.reply_text("Session expired. Please use /verifyotp again.")
+        context.user_data.pop("verify_otp", None)
+        return ConversationHandler.END
+
+    otp = text
+    await update.message.reply_text("⏳ Solving CAPTCHA and verifying OTP…")
+
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+    headers["Content-Type"] = "application/json"
+
+    # Try auto-CAPTCHA for OTP verification (3 attempts)
+    for attempt in range(1, 4):
+        solved = await _fetch_and_solve_captcha(client, headers)
+        if not solved:
+            continue
+
+        captcha_id, answer, _ = solved
+        req_headers = {**headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
+        body = {"nin": profile.nin, "otp": otp}
+
+        try:
+            resp = await client.post("/api/v1/citizens/verify-otp", json=body, headers=req_headers)
+        except Exception as exc:
+            logger.error("OTP verify network error: %s", exc)
+            continue
+
+        logger.info("OTP verify response: status=%s body=%s", resp.status_code, resp.text)
+
+        if 200 <= resp.status_code < 300:
+            await _complete_post_otp_flow(update, context, profile, resp, db_path)
+            context.user_data.pop("verify_otp", None)
+            return ConversationHandler.END
+
+        error_detail = _extract_error_message(resp)
+        logger.warning("OTP verify attempt %d failed: %s", attempt, error_detail)
+
+    # All auto-CAPTCHA failed — ask user to solve manually
+    captcha = await _fetch_captcha_raw(client, headers)
+    if not captcha:
+        await update.message.reply_text("❌ Could not generate CAPTCHA. Try /verifyotp again later.")
+        context.user_data.pop("verify_otp", None)
+        return ConversationHandler.END
+
+    captcha_id, image_bytes = captcha
+    state["otp"] = otp
+    state["captcha_id"] = captcha_id
+    state["captcha_ts"] = time.time()
+
+    await context.bot.send_photo(
+        chat_id=update.effective_chat.id,
+        photo=io.BytesIO(image_bytes),
+        caption="🔐 Auto-CAPTCHA failed. Please solve this CAPTCHA to verify your OTP:",
+        parse_mode="Markdown",
+    )
+    return VERIFY_OTP_CAPTCHA
+
+
+async def verifyotp_captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle manual CAPTCHA answer for OTP verification."""
+    state = context.user_data.get("verify_otp", {})
+    profile = state.get("profile")
+    otp = state.get("otp")
+    captcha_id = state.get("captcha_id")
+    db_path: str = context.application.bot_data["db_path"]
+
+    if not profile or not otp or not captcha_id:
+        await update.message.reply_text("Session expired. Use /verifyotp again.")
+        context.user_data.pop("verify_otp", None)
+        return ConversationHandler.END
+
+    answer = update.message.text.strip()
+    await update.message.reply_text("⏳ Verifying OTP…")
+
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+    headers["Content-Type"] = "application/json"
+    headers["X-Captcha-Id"] = captcha_id
+    headers["X-Captcha-Answer"] = answer
+
+    try:
+        resp = await client.post(
+            "/api/v1/citizens/verify-otp",
+            json={"nin": profile.nin, "otp": otp},
+            headers=headers,
+        )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Network error: `{exc}`", parse_mode="Markdown")
+        context.user_data.pop("verify_otp", None)
+        return ConversationHandler.END
+
+    logger.info("OTP verify (manual captcha) response: status=%s body=%s", resp.status_code, resp.text)
+
+    if 200 <= resp.status_code < 300:
+        await _complete_post_otp_flow(update, context, profile, resp, db_path)
+    else:
+        error_detail = _extract_error_message(resp)
+        await update.message.reply_text(
+            f"❌ OTP verification failed (HTTP {resp.status_code}).\n\nError: {error_detail}\n\n"
+            "Use /verifyotp to try again.",
+        )
+
+    context.user_data.pop("verify_otp", None)
     return ConversationHandler.END
 
 
-# ─── Build the ConversationHandler ─────────────────────────────────────────────
+async def verifyotp_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.pop("verify_otp", None)
+    await update.effective_message.reply_text("OTP verification cancelled.")
+    return ConversationHandler.END
 
-def build_auto_registration_handler() -> ConversationHandler:
+
+# ─── Build handlers ───────────────────────────────────────────────────────────
+
+def build_verifyotp_handler() -> ConversationHandler:
+    """ConversationHandler for /verifyotp flow."""
     return ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(auto_reg_start, pattern=r"^auto_reg:"),
-        ],
+        entry_points=[CommandHandler("verifyotp", verifyotp_start)],
         states={
-            AUTO_CAPTCHA_1: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, collect_captcha_1),
-            ],
-            AUTO_OTP: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, collect_otp),
-            ],
-            AUTO_CAPTCHA_2: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, collect_captcha_2),
+            VERIFY_OTP_CAPTCHA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, verifyotp_handle),
             ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", verifyotp_cancel)],
         per_user=True,
         per_chat=True,
     )

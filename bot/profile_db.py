@@ -14,21 +14,22 @@ logger = logging.getLogger(__name__)
 
 CREATE_PROFILES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS profiles (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id       INTEGER NOT NULL,
-  priority      INTEGER NOT NULL DEFAULT 0,
-  name          TEXT NOT NULL DEFAULT '',
-  nin           TEXT NOT NULL,
-  cnibe         TEXT NOT NULL,
-  phone         TEXT NOT NULL,
-  password      TEXT NOT NULL,
-  wilaya_id     INTEGER NOT NULL,
-  wilaya_name   TEXT NOT NULL DEFAULT '',
-  commune_code  TEXT NOT NULL,
-  commune_name  TEXT NOT NULL DEFAULT '',
-  email         TEXT NOT NULL DEFAULT '',
-  status        TEXT NOT NULL DEFAULT 'pending',
-  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL,
+  priority        INTEGER NOT NULL DEFAULT 0,
+  name            TEXT NOT NULL DEFAULT '',
+  nin             TEXT NOT NULL,
+  cnibe           TEXT NOT NULL,
+  phone           TEXT NOT NULL,
+  password        TEXT NOT NULL,
+  wilaya_id       INTEGER NOT NULL,
+  wilaya_name     TEXT NOT NULL DEFAULT '',
+  commune_code    TEXT NOT NULL,
+  commune_name    TEXT NOT NULL DEFAULT '',
+  email           TEXT NOT NULL DEFAULT '',
+  payment_method  TEXT NOT NULL DEFAULT 'CASH',
+  status          TEXT NOT NULL DEFAULT 'pending',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -48,6 +49,7 @@ class Profile:
     commune_code: str
     commune_name: str
     email: str
+    payment_method: str
     status: str
     created_at: str
 
@@ -67,14 +69,15 @@ def _row_to_profile(row: tuple) -> Profile:
         commune_code=str(row[10]),
         commune_name=str(row[11]),
         email=str(row[12]),
-        status=str(row[13]),
-        created_at=str(row[14]),
+        payment_method=str(row[13]),
+        status=str(row[14]),
+        created_at=str(row[15]),
     )
 
 
 _SELECT_COLS = (
     "id, user_id, priority, name, nin, cnibe, phone, password, "
-    "wilaya_id, wilaya_name, commune_code, commune_name, email, status, created_at"
+    "wilaya_id, wilaya_name, commune_code, commune_name, email, payment_method, status, created_at"
 )
 
 
@@ -104,10 +107,15 @@ async def init_profiles_table(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")
         await db.execute(CREATE_PROFILES_TABLE_SQL)
-        try:
-            await db.execute("ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';")
-        except aiosqlite.OperationalError:
-            pass
+        # Migrations for columns added after initial schema
+        for migration in [
+            "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE profiles ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'CASH';",
+        ]:
+            try:
+                await db.execute(migration)
+            except aiosqlite.OperationalError:
+                pass
         await db.commit()
 
 
@@ -127,8 +135,8 @@ async def add_profile(db_path: str, user_id: int, data: dict[str, Any]) -> int:
             cursor = await db.execute(
                 """
                 INSERT INTO profiles (user_id, priority, name, nin, cnibe, phone, password,
-                    wilaya_id, wilaya_name, commune_code, commune_name, email)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    wilaya_id, wilaya_name, commune_code, commune_name, email, payment_method)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -143,6 +151,7 @@ async def add_profile(db_path: str, user_id: int, data: dict[str, Any]) -> int:
                     data["commune_code"],
                     data.get("commune_name", ""),
                     data.get("email", ""),
+                    data.get("payment_method", "CASH"),
                 ),
             )
             await db.commit()
@@ -181,7 +190,7 @@ async def update_profile_field(
     """Update a single field on a profile. Returns True if updated."""
     allowed_fields = {
         "name", "nin", "cnibe", "phone", "password", "wilaya_id", "wilaya_name",
-        "commune_code", "commune_name", "email", "status",
+        "commune_code", "commune_name", "email", "payment_method", "status",
     }
     if field not in allowed_fields:
         raise ValueError(f"Cannot update field: {field}")
@@ -245,12 +254,46 @@ async def get_pending_profiles_for_wilaya(
             return [_row_to_profile(r) for r in rows]
 
 
-async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
-    """Return distinct wilaya codes that have at least one pending profile."""
+async def get_profiles_for_wilaya_by_statuses(
+    db_path: str, wilaya_code: str, statuses: list[str]
+) -> list[Profile]:
+    """Find all profiles matching a wilaya code and any of the given statuses."""
+    if not statuses:
+        return []
+    placeholders = ",".join("?" for _ in statuses)
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
-            "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles WHERE status='pending'"
+            f"SELECT {_SELECT_COLS} FROM profiles "
+            f"WHERE CAST(wilaya_id AS TEXT)=? AND status IN ({placeholders}) "
+            "ORDER BY priority",
+            (str(wilaya_code), *statuses),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [_row_to_profile(r) for r in rows]
+
+
+async def get_all_profiles_by_status(
+    db_path: str, status: str
+) -> list[Profile]:
+    """Return all profiles with the given status across all users, ordered by user_id then priority."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            f"SELECT {_SELECT_COLS} FROM profiles WHERE status=? ORDER BY user_id, priority",
+            (status,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [_row_to_profile(r) for r in rows]
+
+
+async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
+    """Return distinct wilaya codes that have at least one pending, registered, or pre-registered profile."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles "
+            "WHERE status IN ('pending', 'registered', 'pre-registered')"
         ) as cur:
             rows = await cur.fetchall()
             return [str(r[0]) for r in rows]
@@ -268,3 +311,17 @@ async def set_profile_status(db_path: str, profile_id: int, status: str) -> None
             await db.commit()
 
     await _with_retries(_op)
+
+
+async def get_profiles_by_status(
+    db_path: str, user_id: int, status: str
+) -> list[Profile]:
+    """Return all profiles for a user with a given status, sorted by priority."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            f"SELECT {_SELECT_COLS} FROM profiles WHERE user_id=? AND status=? ORDER BY priority",
+            (user_id, status),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [_row_to_profile(r) for r in rows]

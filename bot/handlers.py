@@ -10,6 +10,8 @@ from telegram.ext import ContextTypes
 from . import db as db_mod
 from . import profile_db
 from .api_client import QuotaStatus
+from .captcha_solver import LocalOcrSolver, TwoCaptchaSolver
+from .registration import _build_headers, _get_http_client
 
 # Canonical list of bot commands — used by the /help handler and set_my_commands.
 BOT_COMMANDS = [
@@ -25,6 +27,9 @@ BOT_COMMANDS = [
     ("deleteprofile", "Delete a registration profile"),
     ("viewprofile", "View full profile details (incl. password)"),
     ("reorder", "Change profile priority order"),
+    ("verifyotp", "Verify OTP for a submitted profile"),
+    ("checkprofile", "Check if a profile NIN is registered on server"),
+    ("testcaptchasolvers", "Test both CAPTCHA solvers side-by-side"),
     ("help", "Show all available commands"),
 ]
 
@@ -195,6 +200,182 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"👁 *Watched wilayas:*\n{watched_section}"
     )
     await update.effective_message.reply_text(msg, parse_mode="Markdown")
+
+
+async def test_captcha_solvers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fetch 5 CAPTCHAs and solve with both ddddocr and 2captcha for comparison."""
+    import base64
+    import io
+    import os
+    import time
+
+    from .registration import _build_headers, _get_http_client
+
+    api_key = os.getenv("TWO_CAPTCHA_API_KEY", "").strip()
+    has_2captcha = bool(api_key)
+
+    await update.message.reply_text(
+        "🧪 *CAPTCHA Solver Test*\n\n"
+        f"Solvers: `ddddocr` {'+ `2captcha`' if has_2captcha else '(2captcha not configured)'}\n"
+        "Fetching 5 CAPTCHAs…",
+        parse_mode="Markdown",
+    )
+
+    # Initialize solvers
+    ocr_solver = LocalOcrSolver()
+    two_solver = TwoCaptchaSolver(api_key) if has_2captcha else None
+
+    client = _get_http_client(context)
+    headers = _build_headers(context)
+
+    for i in range(1, 6):
+        try:
+            resp = await client.get("/api/v1/captcha/generate", headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            captcha_id = data["captchaId"]
+            image_uri = data["captchaImage"]
+            b64 = image_uri.split(",", 1)[1] if "," in image_uri else image_uri
+            image_bytes = base64.b64decode(b64)
+        except Exception as exc:
+            await update.message.reply_text(f"❌ Failed to fetch CAPTCHA #{i}: `{exc}`", parse_mode="Markdown")
+            continue
+
+        # Solve with ddddocr
+        try:
+            t0 = time.monotonic()
+            ocr_answer = await ocr_solver.solve(image_bytes)
+            ocr_time = time.monotonic() - t0
+            ocr_result = f"`{ocr_answer}` ({ocr_time:.2f}s)"
+        except Exception as exc:
+            ocr_result = f"❌ error: `{exc}`"
+
+        # Solve with 2captcha
+        if two_solver:
+            try:
+                t0 = time.monotonic()
+                two_answer = await two_solver.solve(image_bytes)
+                two_time = time.monotonic() - t0
+                two_result = f"`{two_answer}` ({two_time:.1f}s)"
+            except Exception as exc:
+                two_result = f"❌ error: `{exc}`"
+        else:
+            two_result = "_not configured_"
+
+        caption = (
+            f"🔐 *CAPTCHA #{i}*  (`{captcha_id[:8]}…`)\n\n"
+            f"🤖 ddddocr: {ocr_result}\n"
+            f"👤 2captcha: {two_result}"
+        )
+
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=io.BytesIO(image_bytes),
+            caption=caption,
+            parse_mode="Markdown",
+        )
+
+    await update.message.reply_text("✅ Test complete! Review the answers above.")
+
+
+async def checkprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show all profiles as inline buttons for the user to check registration status."""
+    user_id = update.effective_user.id
+    db_path: str = context.application.bot_data["db_path"]
+
+    profiles = await profile_db.get_profiles(db_path, user_id)
+    if not profiles:
+        await update.message.reply_text("You have no profiles. Use /addprofile first.")
+        return
+
+    buttons = []
+    for p in profiles:
+        masked = f"{p.nin[:4]}…{p.nin[-4:]}"
+        label = f"{p.name or masked} ({p.phone})"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"chk_prof:{p.id}")])
+
+    await update.message.reply_text(
+        "🔍 *Check Profile Registration*\n\nSelect a profile to check:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown",
+    )
+
+
+async def on_check_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback handler for chk_prof:<id> buttons."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    data = query.data or ""
+    if not data.startswith("chk_prof:"):
+        return
+
+    profile_id = int(data.split(":", 1)[1])
+    user_id = update.effective_user.id
+    db_path: str = context.application.bot_data["db_path"]
+
+    profile = await profile_db.get_profile(db_path, profile_id, user_id)
+    if not profile:
+        await query.edit_message_text("Profile not found.")
+        return
+
+    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+    await query.edit_message_text(
+        f"⏳ Checking profile *{profile.name or masked}*…",
+        parse_mode="Markdown",
+    )
+
+    from .registration import check_profile_status
+    status, msg, code = await check_profile_status(context, profile)
+
+    if status == "error":
+        logger.error("checkprofile network error: %s", msg)
+        await query.edit_message_text(
+            f"❌ {msg}", parse_mode="Markdown",
+        )
+        return
+
+    logger.info("checkprofile response: profile=%s status=%s body=%s", profile.id, code, msg)
+
+    # Always update the status in the DB
+    await profile_db.set_profile_status(db_path, profile.id, status)
+
+    if status == "pre-registered":
+        await query.edit_message_text(
+            f"🔵 *Profile registered on server!*\n\n"
+            f"Profile: *{profile.name or masked}*\n"
+            f"Phone: `{profile.phone}`\n\n"
+            "Status updated to *pre-registered*.\n"
+            f"{msg}",
+            parse_mode="Markdown",
+        )
+    elif status == "registered":
+        await query.edit_message_text(
+            f"🟢 *Profile is already Active!*\n\n"
+            f"Profile: *{profile.name or masked}*\n\n"
+            f"Status updated to *registered*.\n"
+            f"{msg}",
+            parse_mode="Markdown",
+        )
+    elif status == "ordered":
+        await query.edit_message_text(
+            f"🎉 *Profile has a Pending Order!*\n\n"
+            f"Profile: *{profile.name or masked}*\n\n"
+            f"Status updated to *ordered*.\n"
+            f"{msg}",
+            parse_mode="Markdown",
+        )
+    else:
+        await query.edit_message_text(
+            f"⚪ *Profile NOT registered on server*\n\n"
+            f"Profile: *{profile.name or masked}*\n"
+            f"Status updated to *pending*.\n"
+            f"HTTP {code}: {msg}",
+            parse_mode="Markdown",
+        )
+
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
