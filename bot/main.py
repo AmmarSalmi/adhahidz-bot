@@ -5,10 +5,10 @@ import os
 
 from dotenv import load_dotenv
 from telegram import BotCommand
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler
+from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from .api_client import QuotaApiClient
-from .auto_registration import build_verifyotp_handler
+from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
 from .db import init_db
 from .handlers import BOT_COMMANDS, change, checkprofile, fetchinfo, help_command, on_check_profile, on_wilaya_selected, start, status, stop, test_captcha_solvers
 from .profile_handlers import (
@@ -128,6 +128,9 @@ def main() -> None:
     app.add_handler(build_verifyotp_handler())
     app.add_handler(build_editprofile_handler())
     app.add_handler(build_reorder_handler())
+
+    # Message handlers
+    app.add_handler(MessageHandler(filters.REPLY & filters.TEXT, manual_captcha_reply_handler))
 
     # Simple command handlers
     app.add_handler(CommandHandler("start", start))

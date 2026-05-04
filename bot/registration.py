@@ -791,5 +791,7 @@ async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: prof
                     return "registered", f"Account is active, but failed to fetch orders (HTTP {orders_resp.status_code})", resp.status_code
             except Exception as exc:
                 return "registered", f"Account is active, but failed to fetch orders: {exc}", resp.status_code
+        elif "déjà été envoyé" in error_msg:
+            return "pre-registered", error_msg, resp.status_code
         else:
             return "pending", error_msg, resp.status_code

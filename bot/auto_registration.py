@@ -159,10 +159,28 @@ async def _try_submit_profile(
         if resp.status_code in _IP_BLOCK_CODES:
             return profile, "ip_blocked", _extract_error_message(resp)
 
-        # Rejected (likely wrong CAPTCHA) — cascade to next solver
+        error_msg = _extract_error_message(resp)
+
+        # Parse JSON to accurately check for the specific CAPTCHA Validation Error
+        is_captcha_error = False
+        try:
+            data = resp.json()
+            if data.get("error") == "CAPTCHA Validation Error" or "captcha" in data.get("message", "").lower():
+                is_captcha_error = True
+        except Exception:
+            pass
+
+        if not is_captcha_error and "captcha" not in resp.text.lower():
+            logger.warning(
+                "Profile %s rejected by server (not CAPTCHA): %s",
+                profile.id, error_msg,
+            )
+            return profile, "error", error_msg
+
+        # Rejected for CAPTCHA — cascade to next solver
         logger.warning(
-            "Profile %s attempt %d (%s) rejected: %s",
-            profile.id, attempt, solver.name, _extract_error_message(resp),
+            "Profile %s attempt %d (%s) rejected for CAPTCHA: %s",
+            profile.id, attempt, solver.name, error_msg,
         )
 
     return profile, "captcha_fail", "All CAPTCHA attempts exhausted"
@@ -232,8 +250,23 @@ async def _try_login_and_order(
             last_login_error = "No token in response"
         else:
             last_login_error = _extract_error_message(resp)
+            
+            is_captcha_error = False
+            try:
+                data = resp.json()
+                if data.get("error") == "CAPTCHA Validation Error" or "captcha" in data.get("message", "").lower():
+                    is_captcha_error = True
+            except Exception:
+                pass
+
+            if not is_captcha_error and "captcha" not in resp.text.lower():
+                logger.warning(
+                    "Login profile %s failed (not CAPTCHA): %s",
+                    profile.id, last_login_error,
+                )
+                break  # Don't retry CAPTCHA, it's a real login failure (e.g., bad password)
             logger.warning(
-                "Login profile %s attempt %d (%s) failed: %s",
+                "Login profile %s attempt %d (%s) failed CAPTCHA: %s",
                 profile.id, attempt, solver.name, last_login_error,
             )
 
@@ -605,40 +638,45 @@ async def _send_manual_captcha(
 
     captcha_id, image_bytes = captcha
 
-    # Store pending manual captcha in bot_data keyed by user_id
-    pending_key = f"manual_captcha_{user_id}"
-    app.bot_data[pending_key] = {
-        "profile": profile,
-        "captcha_id": captcha_id,
-        "captcha_ts": time.time(),
-    }
-
+    # Store pending manual captcha keyed by user_id and message_id
     masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-    await app.bot.send_photo(
+    msg = await app.bot.send_photo(
         chat_id=user_id,
         photo=io.BytesIO(image_bytes),
         caption=(
             f"🔐 *Manual CAPTCHA needed*\n\n"
             f"Profile: *{profile.name or masked}*\n"
             f"Phone: `{profile.phone}`\n\n"
-            "Auto-solve failed. Please type the CAPTCHA answer below.\n"
+            "Auto-solve failed. **Reply to this message** with the CAPTCHA answer.\n"
             f"_Expires in {_CAPTCHA_TTL_S} seconds._"
         ),
         parse_mode="Markdown",
     )
 
+    pending_dict = app.bot_data.setdefault(f"manual_captchas_{user_id}", {})
+    pending_dict[msg.message_id] = {
+        "profile": profile,
+        "captcha_id": captcha_id,
+        "captcha_ts": time.time(),
+    }
+
 
 # ─── Manual CAPTCHA conversation handler ──────────────────────────────────────
 
-async def manual_captcha_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Triggered when user sends text while a manual CAPTCHA is pending."""
+async def manual_captcha_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Triggered when user replies to a manual CAPTCHA message."""
+    if not update.message or not update.message.reply_to_message:
+        return
+
     user_id = update.effective_user.id
-    pending_key = f"manual_captcha_{user_id}"
-    pending = context.application.bot_data.get(pending_key)
+    reply_msg_id = update.message.reply_to_message.message_id
+    
+    pending_dict = context.application.bot_data.get(f"manual_captchas_{user_id}", {})
+    pending = pending_dict.get(reply_msg_id)
 
     if not pending:
-        # No pending captcha — ignore
-        return ConversationHandler.END
+        # Not a reply to an active manual captcha
+        return
 
     profile: profile_db.Profile = pending["profile"]
     captcha_id: str = pending["captcha_id"]
@@ -654,28 +692,33 @@ async def manual_captcha_entry(update: Update, context: ContextTypes.DEFAULT_TYP
         if not new_captcha:
             await update.message.reply_text("❌ Failed to regenerate CAPTCHA. Will retry next cycle.")
             await profile_db.set_profile_status(db_path, profile.id, "pending")
-            context.application.bot_data.pop(pending_key, None)
-            return ConversationHandler.END
+            pending_dict.pop(reply_msg_id, None)
+            return
 
         new_id, new_bytes = new_captcha
-        pending["captcha_id"] = new_id
-        pending["captcha_ts"] = time.time()
 
         await update.message.reply_text("⏰ Previous CAPTCHA expired. Here's a new one:")
         masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-        await context.bot.send_photo(
+        new_msg = await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=io.BytesIO(new_bytes),
             caption=(
                 f"🔐 *CAPTCHA* for *{profile.name or masked}*\n"
-                "Type your answer below."
+                "**Reply to this message** with your answer."
             ),
             parse_mode="Markdown",
         )
-        return MANUAL_CAPTCHA
+        
+        pending_dict.pop(reply_msg_id, None)
+        pending_dict[new_msg.message_id] = {
+            "profile": profile,
+            "captcha_id": new_id,
+            "captcha_ts": time.time(),
+        }
+        return
 
     answer = update.message.text.strip()
-    await update.message.reply_text("⏳ Submitting registration…")
+    await update.message.reply_text(f"⏳ Submitting registration for {profile.name or profile.nin[:4]+'…'}…")
 
     # Submit
     body = {
@@ -702,8 +745,8 @@ async def manual_captcha_entry(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error("Manual submit network error: %s", exc)
         await update.message.reply_text(f"❌ Network error: `{exc}`", parse_mode="Markdown")
         await profile_db.set_profile_status(db_path, profile.id, "pending")
-        context.application.bot_data.pop(pending_key, None)
-        return ConversationHandler.END
+        pending_dict.pop(reply_msg_id, None)
+        return
 
     logger.info("Manual submit response: status=%s body=%s", resp.status_code, resp.text)
 
@@ -721,8 +764,7 @@ async def manual_captcha_entry(update: Update, context: ContextTypes.DEFAULT_TYP
             f"❌ Registration failed (HTTP {resp.status_code}).\n\nError: {error_detail}"
         )
 
-    context.application.bot_data.pop(pending_key, None)
-    return ConversationHandler.END
+    pending_dict.pop(reply_msg_id, None)
 
 
 # ─── Post-OTP flow: create order + fetch receipt ─────────────────────────────
