@@ -299,6 +299,19 @@ async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
             return [str(r[0]) for r in rows]
 
 
+async def get_user_profile_wilayas(db_path: str, user_id: int) -> list[str]:
+    """Return distinct wilaya codes for a specific user's active profiles."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles "
+            "WHERE user_id=? AND status IN ('pending', 'registered', 'pre-registered')",
+            (user_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [str(r[0]) for r in rows]
+
+
 async def set_profile_status(db_path: str, profile_id: int, status: str) -> None:
     """Update profile status."""
     async def _op():

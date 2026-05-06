@@ -126,6 +126,18 @@ async def get_distinct_wilayas(db_path: str) -> list[str]:
             return [str(r[0]) for r in rows]
 
 
+async def get_user_subscription_wilaya(db_path: str, user_id: int) -> str | None:
+    """Return the wilaya code the user is subscribed to, or None."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT Wilaya_code FROM subscriptions WHERE user_id=?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return str(row[0]) if row else None
+
+
 async def get_subscribers(db_path: str, wilaya_code: str) -> list[int]:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")

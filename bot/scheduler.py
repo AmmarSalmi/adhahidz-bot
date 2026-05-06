@@ -114,20 +114,28 @@ async def _poll_once(
                     await notify_users(app.bot, to_notify, msg)
                     await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
-                # Auto-registration: trigger for pending + registered profiles
-                try:
-                    actionable_profiles = await profile_db.get_profiles_for_wilaya_by_statuses(
-                        db_path, wilaya_code, ["pending", "registered", "pre-registered"]
+                # Auto-registration: trigger only once per availability window
+                auto_reg_done: set[str] = app.bot_data.setdefault("auto_reg_done", set())
+                if wilaya_code in auto_reg_done:
+                    logger.debug(
+                        "Auto-registration already triggered for wilaya %s this window — skipping",
+                        wilaya_code,
                     )
-                    if actionable_profiles:
-                        logger.info(
-                            "Found %d actionable profiles for wilaya %s — triggering auto-registration",
-                            len(actionable_profiles),
-                            wilaya_code,
+                else:
+                    try:
+                        actionable_profiles = await profile_db.get_profiles_for_wilaya_by_statuses(
+                            db_path, wilaya_code, ["pending", "registered", "pre-registered"]
                         )
-                        await auto_submit_profiles(app, actionable_profiles)
-                except Exception:
-                    logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
+                        if actionable_profiles:
+                            logger.info(
+                                "Found %d actionable profiles for wilaya %s — triggering auto-registration",
+                                len(actionable_profiles),
+                                wilaya_code,
+                            )
+                            await auto_submit_profiles(app, actionable_profiles)
+                        auto_reg_done.add(wilaya_code)
+                    except Exception:
+                        logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
             else:
                 # Notify users that the quota they were alerted about is now gone.
                 previously_notified = await db_mod.get_notified_subscribers(db_path, wilaya_code)
@@ -136,6 +144,9 @@ async def _poll_once(
                     gone_msg = f"❌ Quota in {wilaya_name} is no longer available."
                     await notify_users(app.bot, previously_notified, gone_msg)
                 await db_mod.reset_notified_for_wilaya(db_path, wilaya_code)
+                # Reset auto-registration gate so it re-triggers next time quota opens
+                auto_reg_done: set[str] = app.bot_data.setdefault("auto_reg_done", set())
+                auto_reg_done.discard(wilaya_code)
     except Exception:
         logger.exception("Scheduler poll failed")
 

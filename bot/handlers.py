@@ -150,6 +150,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the last successful quota fetch time and all watched wilayas."""
     db_path: str = context.application.bot_data["db_path"]
+    user_id = update.effective_user.id
 
     # --- Last fetch timestamp ---
     raw_ts: str | None = context.application.bot_data.get("last_fetch_ts")
@@ -162,19 +163,20 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         fetch_line = "🕐 *Last fetch:* _not done yet_"
 
-    # --- Wilayas being watched ---
+    # --- Wilayas being watched (scoped to the requesting user) ---
     wilaya_lookup = dict(_get_wilaya_list(context))  # code -> name
 
-    # Subscriptions
+    # Subscription
     try:
-        sub_codes = set(await db_mod.get_distinct_wilayas(db_path))
+        sub_code = await db_mod.get_user_subscription_wilaya(db_path, user_id)
+        sub_codes = {sub_code} if sub_code else set()
     except Exception:
-        logger.exception("fetchinfo: failed to load subscription wilayas")
+        logger.exception("fetchinfo: failed to load subscription wilaya")
         sub_codes = set()
 
     # Pending auto-registration profiles
     try:
-        prof_codes = set(await profile_db.get_distinct_profile_wilayas(db_path))
+        prof_codes = set(await profile_db.get_user_profile_wilayas(db_path, user_id))
     except Exception:
         logger.exception("fetchinfo: failed to load profile wilayas")
         prof_codes = set()
