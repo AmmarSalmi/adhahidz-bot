@@ -6,7 +6,7 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Quota Monitoring**: Periodically checks Wilaya-level quota availability from the REST API.
 - **Notifications**: Alerts subscribed users when quota becomes available in their chosen Wilaya.
 - **Auto-Registration**: Comprehensive profile management to automatically register users, handle OTPs, and create orders the moment quotas open. Includes support for selecting payment methods (CASH, TPE, EN_LIGNE).
-- **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows.
+- **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
 
 ### Prerequisites

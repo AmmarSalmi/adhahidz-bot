@@ -5,3 +5,4 @@
 api_captures/
 captcha_sample.png
 testing_scripts/
+debug_query.py

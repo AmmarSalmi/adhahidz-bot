@@ -195,7 +195,7 @@ async def _try_login_and_order(
 ) -> tuple[profile_db.Profile, str, str]:
     """Login with a registered profile and submit an order.
 
-    Strategy: 2captcha first (paid, reliable), then ddddocr fallback.
+    Strategy: ddddocr first (free), then 2captcha fallback (paid).
     Returns (profile, outcome, detail) where outcome is one of:
       "ordered"      — order created successfully
       "captcha_fail" — all CAPTCHA attempts exhausted
@@ -203,12 +203,14 @@ async def _try_login_and_order(
       "order_fail"   — logged in but order creation failed
       "error"        — network or unexpected error
     """
-    # Build solver list: 2captcha first, then ddddocr fallback
-    solvers_to_try: list[CaptchaSolver] = []
-    if _fallback_solver:  # 2captcha is the "fallback" in the module but we want it first here
+    # Build solver list: ddddocr first, then 2captcha fallback
+    solvers_to_try: list[CaptchaSolver] = [_primary_solver]
+    if _fallback_solver:
         solvers_to_try.append(_fallback_solver)
-    solvers_to_try.append(_primary_solver)  # ddddocr
-    solvers_to_try.append(_primary_solver)  # retry ddddocr
+        solvers_to_try.append(_fallback_solver)
+    else:
+        solvers_to_try.append(_primary_solver)
+        solvers_to_try.append(_primary_solver)
 
     # ── Step 1: Login ──
     access_token = None
@@ -472,9 +474,17 @@ async def _process_registered_profiles(
     base_headers: dict[str, str],
     db_path: str,
 ) -> None:
-    """Handle registered profiles: login + submit order concurrently."""
-    tasks = [_try_login_and_order(p, client, base_headers) for p in profiles]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    """Handle registered profiles: login + submit order sequentially.
+
+    Sequential processing avoids firing multiple captcha solvers in parallel
+    and wasting paid 2captcha credits.
+    """
+    results: list[tuple | Exception] = []
+    for p in profiles:
+        try:
+            results.append(await _try_login_and_order(p, client, base_headers))
+        except Exception as exc:
+            results.append(exc)
 
     for result in results:
         if isinstance(result, Exception):
@@ -536,11 +546,19 @@ async def _process_user_profiles(
     base_headers: dict[str, str],
     db_path: str,
 ) -> None:
-    """Phase 1: concurrent.  Phase 2: sequential fallback."""
+    """Phase 1: sequential auto-CAPTCHA.  Phase 2: sequential manual fallback.
 
-    # ── Phase 1: Concurrent ──
-    tasks = [_try_submit_profile(p, client, base_headers) for p in profiles]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    Sequential processing ensures the ddddocr→2captcha cascade works properly
+    per profile without parallel solver invocations.
+    """
+
+    # ── Phase 1: Sequential auto-CAPTCHA ──
+    results: list[tuple | Exception] = []
+    for p in profiles:
+        try:
+            results.append(await _try_submit_profile(p, client, base_headers))
+        except Exception as exc:
+            results.append(exc)
 
     remaining: list[profile_db.Profile] = []
     ip_blocked = False
