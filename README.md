@@ -4,10 +4,13 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 
 ### Features
 - **Quota Monitoring**: Periodically checks Wilaya-level quota availability from the REST API.
+- **Interactive UI**: Navigate easily using persistent bottom menus and hierarchical inline keyboards instead of memorizing commands.
+- **Multi-language Support (i18n)**: Fully localized interface in Arabic 🇩🇿, French 🇫🇷, and English 🇬🇧.
 - **Notifications**: Alerts subscribed users when quota becomes available in their chosen Wilaya.
-- **Auto-Registration**: Comprehensive profile management to automatically register users, handle OTPs, and create orders the moment quotas open. Includes support for selecting payment methods (CASH, TPE, EN_LIGNE).
+- **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open without blocking. Includes support for selecting payment methods (CASH, TPE, EN_LIGNE).
 - **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
+- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode" to limit regular user activity during critical quota periods.
 
 ### Prerequisites
 - Docker + Docker Compose
@@ -43,8 +46,13 @@ SQLite data persists in the named volume `bot-data` mounted at `/data`.
 
 ### Bot commands
 
+Most interaction is now handled via the built-in menus, but commands are still available:
+
+**General Navigation**
+- `/start` or `/menu`: Open the interactive main menu
+- `/help`: Show all available commands
+
 **Quota & Monitoring**
-- `/start`: Subscribe to wilaya quota notifications
 - `/change`: Change your subscribed wilaya
 - `/status`: Check your current subscription status
 - `/stop`: Unsubscribe from notifications
@@ -61,7 +69,6 @@ SQLite data persists in the named volume `bot-data` mounted at `/data`.
 - `/verifyotp`: Verify OTP for a submitted profile
 - `/register`: Manual adhahi.dz registration flow
 - `/testcaptchasolvers`: Test both CAPTCHA solvers side-by-side
-- `/help`: Show all available commands
 
 ### Adapting to a different quota API
 All API shape assumptions are centralized in `bot/api_client.py`:
