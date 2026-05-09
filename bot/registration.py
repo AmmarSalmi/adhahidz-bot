@@ -771,77 +771,93 @@ def build_registration_handler() -> ConversationHandler:
 
 from . import profile_db
 
-async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: profile_db.Profile) -> tuple[str, str, int]:
+async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: profile_db.Profile, proxy_url: str | None = None) -> tuple[str, str, int]:
     """Returns (status, status_message, http_code). status is 'pre-registered', 'registered', 'pending', or 'error'."""
-    client = _get_http_client(context)
-    headers = _build_headers(context)
-    headers["Content-Type"] = "application/json"
-    headers["Referer"] = "https://adhahi.dz/activation"
-    headers["Origin"] = "https://adhahi.dz"
-
-    try:
-        resp = await client.post(
-            "/api/v1/citizens/resend-otp",
-            json={"nin": profile.nin},
-            headers=headers,
-        )
-    except Exception as exc:
-        return "error", f"Network error: {exc}", 0
-
-    if 200 <= resp.status_code < 300:
-        return "pre-registered", "An OTP has been sent — use /verifyotp to complete verification.", resp.status_code
+    # We create a temporary session for this check if a proxy is provided to avoid 
+    # dirtying the persistent user session or to ensure the proxy is applied.
+    if proxy_url:
+        api = context.application.bot_data.get("api_client")
+        client = api.create_session(proxy_url=proxy_url)
+        should_close = True
     else:
-        try:
-            error_msg = resp.json().get("message", resp.text)
-        except Exception:
-            error_msg = resp.text
+        client = _get_http_client(context)
+        should_close = False
         
-        if "Compte déjà actif" in error_msg:
-            # Login to check if the user has an order
-            from .auto_registration import _fetch_and_solve_captcha
-            access_token = None
-            login_msg = "Failed to login after 3 attempts."
-            for attempt in range(3):
-                solved = await _fetch_and_solve_captcha(client, headers)
-                if not solved:
-                    continue
-                captcha_id, answer, _ = solved
-                login_headers = {**headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
-                login_body = {
-                    "nin": profile.nin,
-                    "password": profile.password,
-                    "deviceInfo": "WEB_APP",
-                    "sessionType": "WEB"
-                }
-                try:
-                    login_resp = await client.post("/api/v1/citizens/login", json=login_body, headers=login_headers)
-                    if 200 <= login_resp.status_code < 300:
-                        access_token = login_resp.json().get("token")
-                        break
-                    else:
-                        login_msg = f"Login failed: HTTP {login_resp.status_code}"
-                except Exception as exc:
-                    login_msg = f"Login error: {exc}"
-            
-            if not access_token:
-                return "registered", f"Account is active, but couldn't verify orders (Login failed: {login_msg})", resp.status_code
-            
-            order_headers = {**headers, "Authorization": f"Bearer {access_token}", "Referer": "https://adhahi.dz/user/confirmation"}
-            try:
-                orders_resp = await client.get("/api/v1/orders/my-orders?page=0&size=10", headers=order_headers)
-                if 200 <= orders_resp.status_code < 300:
-                    orders_data = orders_resp.json()
-                    recent = orders_data.get("recentOrders", [])
-                    has_pending = any(o.get("status") == "PENDING" for o in recent)
-                    if has_pending:
-                        return "ordered", "Account is active and has a PENDING order.", resp.status_code
-                    else:
-                        return "registered", "Account is active, but no pending orders found.", resp.status_code
-                else:
-                    return "registered", f"Account is active, but failed to fetch orders (HTTP {orders_resp.status_code})", resp.status_code
-            except Exception as exc:
-                return "registered", f"Account is active, but failed to fetch orders: {exc}", resp.status_code
-        elif "déjà été envoyé" in error_msg:
-            return "pre-registered", error_msg, resp.status_code
+    try:
+        headers = _build_headers(context)
+        headers["Content-Type"] = "application/json"
+        headers["Referer"] = "https://adhahi.dz/activation"
+        headers["Origin"] = "https://adhahi.dz"
+
+        try:
+            resp = await client.post(
+                "/api/v1/citizens/resend-otp",
+                json={"nin": profile.nin},
+                headers=headers,
+            )
+        except Exception as exc:
+            return "error", f"Network error: {exc}", 0
+
+        if 200 <= resp.status_code < 300:
+            return "pre-registered", "An OTP has been sent — use /verifyotp to complete verification.", resp.status_code
         else:
-            return "pending", error_msg, resp.status_code
+            try:
+                error_msg = resp.json().get("message", resp.text)
+            except Exception:
+                error_msg = resp.text
+            
+            if "Compte déjà actif" in error_msg:
+                # Login to check if the user has an order
+                from .auto_registration import _fetch_and_solve_captcha
+                access_token = None
+                login_msg = "Failed to login after 3 attempts."
+                for attempt in range(3):
+                    solved = await _fetch_and_solve_captcha(client, headers)
+                    if not solved:
+                        continue
+                    captcha_id, answer, _ = solved
+                    login_headers = {**headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
+                    login_body = {
+                        "nin": profile.nin,
+                        "password": profile.password,
+                        "deviceInfo": "WEB_APP",
+                        "sessionType": "WEB"
+                    }
+                    try:
+                        login_resp = await client.post("/api/v1/citizens/login", json=login_body, headers=login_headers)
+                        if 200 <= login_resp.status_code < 300:
+                            access_token = login_resp.json().get("token")
+                            break
+                        else:
+                            login_msg = f"Login failed: HTTP {login_resp.status_code}"
+                    except Exception as exc:
+                        login_msg = f"Login error: {exc}"
+                
+                if not access_token:
+                    return "registered", f"Account is active, but couldn't verify orders (Login failed: {login_msg})", resp.status_code
+                
+                order_headers = {**headers, "Authorization": f"Bearer {access_token}", "Referer": "https://adhahi.dz/user/confirmation"}
+                try:
+                    orders_resp = await client.get("/api/v1/orders/my-orders?page=0&size=10", headers=order_headers)
+                    if 200 <= orders_resp.status_code < 300:
+                        orders_data = orders_resp.json()
+                        recent = orders_data.get("recentOrders", [])
+                        has_pending = any(o.get("status") == "PENDING" for o in recent)
+                        if has_pending:
+                            return "ordered", "Account is active and has a PENDING order.", resp.status_code
+                        else:
+                            return "registered", "Account is active, but no pending orders found.", resp.status_code
+                    else:
+                        return "registered", f"Account is active, but failed to fetch orders (HTTP {orders_resp.status_code})", resp.status_code
+                except Exception as exc:
+                    return "registered", f"Account is active, but failed to fetch orders: {exc}", resp.status_code
+            elif "déjà été envoyé" in error_msg:
+                return "pre-registered", error_msg, resp.status_code
+            else:
+                return "pending", error_msg, resp.status_code
+    except Exception as outer_exc:
+        logger.error("Error in check_profile_status: %s", outer_exc)
+        return "error", f"Unexpected error: {outer_exc}", 0
+    finally:
+        if should_close:
+            await client.aclose()

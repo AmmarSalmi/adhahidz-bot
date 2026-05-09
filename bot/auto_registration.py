@@ -367,8 +367,8 @@ async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
     if not api_client:
         return
 
-    # Check if proxy is enabled via admin panel
-    use_proxy = app.bot_data.get("use_proxy", False)
+    # Check if proxy is enabled for auto-registration via admin panel
+    use_proxy = app.bot_data.get("proxy_autoreg", False)
     
     # Validation check for proxy settings
     if use_proxy and not get_proxy_url():

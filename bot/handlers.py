@@ -379,7 +379,12 @@ async def on_check_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
     from .registration import check_profile_status
-    status, msg, code = await check_profile_status(context, profile)
+    from .proxy import get_proxy_url
+    
+    use_proxy = context.application.bot_data.get("proxy_checkprof", False)
+    proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+    
+    status, msg, code = await check_profile_status(context, profile, proxy_url=proxy_url)
 
     if status == "error":
         logger.error("checkprofile network error: %s", msg)

@@ -197,16 +197,25 @@ class QuotaApiClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def fetch_wilaya_quotas(self) -> dict[str, QuotaStatus]:
+    async def fetch_wilaya_quotas(self, proxy_url: str | None = None) -> dict[str, QuotaStatus]:
         import time
         # Adhahi endpoint from provided curl
         # Add cache-busting parameter to bypass CDN/proxy caches
         path = f"/api/v1/public/wilaya-quotas?_t={int(time.time() * 1000)}"
+        
+        # If proxy is requested, we use a temporary session
+        if proxy_url:
+            async with self.create_session(proxy_url=proxy_url) as client:
+                return await self._fetch_with_client(client, path)
+        else:
+            return await self._fetch_with_client(self._client, path)
+
+    async def _fetch_with_client(self, client: httpx.AsyncClient, path: str) -> dict[str, QuotaStatus]:
         delay_s = 0.5
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
-                resp = await self._client.get(path)
+                resp = await client.get(path)
                 if resp.status_code >= 500:
                     raise httpx.HTTPStatusError(
                         f"Server error '{resp.status_code}' for url '{resp.request.url}'",

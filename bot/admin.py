@@ -87,9 +87,7 @@ def is_restricted_mode(context) -> bool:
     return bool(context.application.bot_data.get("restricted_mode", False))
 
 
-def is_proxy_enabled(context) -> bool:
-    """Return True if the bot is configured to use the Databay proxy."""
-    return bool(context.application.bot_data.get("use_proxy", False))
+
 
 
 async def check_restricted(update: Update, context) -> bool:
@@ -225,21 +223,37 @@ async def on_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 def _admin_keyboard(context) -> InlineKeyboardMarkup:
     """Build the admin panel keyboard with current states."""
     restricted = is_restricted_mode(context)
-    proxy = is_proxy_enabled(context)
     
     toggle_restrict = "🔓 Unrestrict Users" if restricted else "🔒 Restrict Users"
-    toggle_proxy = "🌐 Proxy: ON" if proxy else "🌐 Proxy: OFF"
     
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
             [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
             [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
-            [InlineKeyboardButton(toggle_proxy, callback_data="admin:toggle_proxy")],
+            [InlineKeyboardButton("🌐 Proxy Settings ⚙️", callback_data="admin:proxy_submenu")],
             [InlineKeyboardButton("⚙️ Set Concurrency Limit", callback_data="admin:set_concurrency")],
             [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
         ]
     )
+
+
+def _proxy_submenu_keyboard(context) -> InlineKeyboardMarkup:
+    """Build the proxy settings submenu keyboard."""
+    p_wilaya = context.application.bot_data.get("proxy_wilaya", False)
+    p_autoreg = context.application.bot_data.get("proxy_autoreg", False)
+    p_checkprof = context.application.bot_data.get("proxy_checkprof", False)
+    
+    t_wilaya = f"📊 Quota Check: {'✅ ON' if p_wilaya else '❌ OFF'}"
+    t_autoreg = f"🤖 Auto-Reg: {'✅ ON' if p_autoreg else '❌ OFF'}"
+    t_checkprof = f"🔍 Profile Check: {'✅ ON' if p_checkprof else '❌ OFF'}"
+    
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t_wilaya, callback_data="admin:toggle_proxy:wilaya")],
+        [InlineKeyboardButton(t_autoreg, callback_data="admin:toggle_proxy:autoreg")],
+        [InlineKeyboardButton(t_checkprof, callback_data="admin:toggle_proxy:checkprof")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -277,10 +291,10 @@ async def on_admin_toggle_restrict(
     )
 
 
-async def on_admin_toggle_proxy(
+async def on_admin_proxy_submenu(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Toggle proxy usage for auto-registration."""
+    """Show the proxy settings submenu."""
     query = update.callback_query
     if not query:
         return
@@ -290,20 +304,48 @@ async def on_admin_toggle_proxy(
         await query.edit_message_text("⛔ Access denied.")
         return
 
-    current = is_proxy_enabled(context)
-    context.application.bot_data["use_proxy"] = not current
+    keyboard = _proxy_submenu_keyboard(context)
+    await query.edit_message_text(
+        "🌐 *Proxy Management*\n\n"
+        "Configure where the Databay residential proxy should be used:",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_toggle_proxy(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Toggle specific proxy usage settings."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    data = query.data or ""
+    # Format: admin:toggle_proxy:<key>
+    parts = data.split(":")
+    if len(parts) < 3:
+        # Compatibility with old toggle if any
+        return
+
+    key_suffix = parts[2]
+    key = f"proxy_{key_suffix}"
+    
+    current = context.application.bot_data.get(key, False)
+    context.application.bot_data[key] = not current
     new_state = not current
 
-    logger.info("Admin toggled use_proxy → %s", new_state)
+    logger.info("Admin toggled %s → %s", key, new_state)
 
-    status_emoji = "🌐"
-    status_text = "ENABLED (Databay)" if new_state else "DISABLED (Bypass)"
-
-    keyboard = _admin_keyboard(context)
+    keyboard = _proxy_submenu_keyboard(context)
     await query.edit_message_text(
-        f"👑 *Admin Panel*\n\n"
-        f"{status_emoji} Databay Proxy: *{status_text}*\n"
-        f"_Applied only to auto-registration flow._",
+        "🌐 *Proxy Management*\n\n"
+        "Settings updated successfully.",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )

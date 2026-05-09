@@ -22,6 +22,7 @@ async def _confirm_available(
     wilaya_code: str,
     confirm_fetches: int,
     confirm_delay_s: float,
+    proxy_url: str | None = None,
 ) -> bool:
     """
     Confirm that a wilaya remains available across successive fetches.
@@ -34,7 +35,7 @@ async def _confirm_available(
         if confirm_delay_s > 0:
             await asyncio.sleep(confirm_delay_s)
 
-        statuses = await api_client.fetch_wilaya_quotas()
+        statuses = await api_client.fetch_wilaya_quotas(proxy_url=proxy_url)
         st = statuses.get(wilaya_code)
         if not st or not st.available:
             logger.info(
@@ -57,8 +58,12 @@ async def _poll_once(
     confirm_fetches: int,
     confirm_delay_s: float,
 ) -> None:
+    from .proxy import get_proxy_url
+    use_proxy = app.bot_data.get("proxy_wilaya", False)
+    proxy_url = get_proxy_url() if use_proxy else None
+
     try:
-        statuses = await api_client.fetch_wilaya_quotas()
+        statuses = await api_client.fetch_wilaya_quotas(proxy_url=proxy_url)
         now = datetime.now(timezone.utc).isoformat()
 
         # Stamp the last successful fetch timestamp so /fetchinfo can report it
@@ -108,6 +113,7 @@ async def _poll_once(
                     wilaya_code=wilaya_code,
                     confirm_fetches=confirm_fetches,
                     confirm_delay_s=confirm_delay_s,
+                    proxy_url=proxy_url,
                 )
                 if not confirmed:
                     continue

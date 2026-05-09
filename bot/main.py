@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy
+from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy, on_admin_proxy_submenu
 
 from .api_client import QuotaApiClient
 from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
@@ -79,6 +79,11 @@ async def _post_init(app: Application) -> None:
     # Global semaphore for auto-registration connections
     import asyncio
     app.bot_data["concurrency_semaphore"] = asyncio.Semaphore(max_concurrent)
+
+    # Proxy settings initialization
+    app.bot_data["proxy_wilaya"] = os.getenv("PROXY_WILAYA", "false").lower() == "true"
+    app.bot_data["proxy_autoreg"] = os.getenv("PROXY_AUTOREG", "false").lower() == "true"
+    app.bot_data["proxy_checkprof"] = os.getenv("PROXY_CHECKPROF", "false").lower() == "true"
 
     try:
         app.bot_data["wilayas"] = await _load_wilayas(api, db_path)
@@ -209,7 +214,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_stats, pattern=r"^admin:stats$"))
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_restrict, pattern=r"^admin:toggle_restrict$"))
-    app.add_handler(CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy$"))
+    app.add_handler(CallbackQueryHandler(on_admin_proxy_submenu, pattern=r"^admin:proxy_submenu$"))
+    app.add_handler(CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:"))
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))
