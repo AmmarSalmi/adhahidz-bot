@@ -11,7 +11,8 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
 - **Profile Usage Limits**: Enforces a fair-usage limit of 3 registration profiles per user to ensure system stability and performance.
-- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, and proxy controls. Commands like `/checkprofile` are restricted to administrators.
+- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, and **granular proxy controls**. Commands like `/checkprofile` are restricted to administrators.
+- **Granular Proxy Management**: Admin can independently toggle Databay residential proxy usage for three critical workflows: Wilaya quota monitoring, Automated registration/ordering, and Profile status checking.
 
 ### Prerequisites
 - Docker + Docker Compose
@@ -37,6 +38,9 @@ Optional tuning:
 - `CONFIRM_DELAY_SECONDS`: delay between confirmation re-fetches in seconds (default `1`)
 - `TWO_CAPTCHA_API_KEY`: API key for 2Captcha service (optional, falls back to local `ddddocr` if not provided)
 - `MAX_CONCURRENT_SESSIONS`: global limit of simultaneous registration/login connections (default `50`)
+- `PROXY_WILAYA`: enable proxy for background quota checks (default `false`)
+- `PROXY_AUTOREG`: enable proxy for auto-registration flow (default `false`)
+- `PROXY_CHECKPROF`: enable proxy for `/checkprofile` command (default `false`)
 
 ### Run
 
