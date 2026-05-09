@@ -60,6 +60,8 @@ _TRANSLATIONS = {
         "_No wilayas are currently being watched._": "_لا توجد ولايات مراقبة حالياً._",
         "👁 *Watched wilayas:*\n": "👁 *الولايات المراقبة:*\n",
         "⚠️ *Profile Limit Reached*\n\nTo ensure fair access, we are restricting all users to a maximum of 3 profiles. Please delete an existing profile manually using /profiles to add a new one.": "⚠️ *تم الوصول إلى حد الملفات*\n\nلضمان الوصول العادل، نقوم بتحديد جميع المستخدمين بحد أقصى 3 ملفات شخصية. يرجى حذف ملف شخصي موجود يدوياً باستخدام /profiles لإضافة ملف جديد.",
+        "⚠️ *Quota is not active for this wilaya.*": "⚠️ *الحصة غير مفعلة لهذه الولاية.*",
+        "Manual registration only works when the quota is open. Please wait for a notification or use auto-registration profiles to snatch it automatically!": "التسجيل اليدوي يعمل فقط عندما تكون الحصة مفتوحة. يرجى انتظار الإشعار أو استخدام ملفات التسجيل التلقائي للحجز تلقائياً!",
     },
     "fr": {
         "Welcome! I couldn't load the Wilaya list yet (API unavailable). Send /change later to try again.": "Bienvenue ! Je n'ai pas pu charger la liste des Wilayas. Envoyez /change plus tard.",
@@ -115,6 +117,8 @@ _TRANSLATIONS = {
         "_No wilayas are currently being watched._": "_Aucune wilaya n'est actuellement surveillée._",
         "👁 *Watched wilayas:*\n": "👁 *Wilayas surveillées :*\n",
         "⚠️ *Profile Limit Reached*\n\nTo ensure fair access, we are restricting all users to a maximum of 3 profiles. Please delete an existing profile manually using /profiles to add a new one.": "⚠️ *Limite de profils atteinte*\n\nPour garantir un accès équitable, nous limitons tous les utilisateurs à un maximum de 3 profils. Veuillez supprimer manuellement un profil existant via /profiles pour en ajouter un nouveau.",
+        "⚠️ *Quota is not active for this wilaya.*": "⚠️ *Le quota n'est pas actif pour cette wilaya.*",
+        "Manual registration only works when the quota is open. Please wait for a notification or use auto-registration profiles to snatch it automatically!": "L'inscription manuelle ne fonctionne que lorsque le quota est ouvert. Veuillez attendre une notification ou utiliser les profils d'auto-inscription pour réserver automatiquement !",
     }
 }
 

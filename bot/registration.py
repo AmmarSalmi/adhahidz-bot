@@ -34,6 +34,7 @@ from telegram.ext import (
 )
 
 from .admin import check_restricted
+from .i18n import t, get_lang
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,18 @@ async def on_wilaya_selected(
             wilaya_name = name
             break
     state["wilayaName"] = wilaya_name
+    
+    # Check if quota is open for this wilaya
+    last_known = context.application.bot_data.get("last_known", {})
+    status = last_known.get(wilaya_code)
+    if status and not status.available:
+        lang = await get_lang(context, update.effective_user.id)
+        await query.edit_message_text(
+            f"{t(lang, '⚠️ *Quota is not active for this wilaya.*')}\n\n"
+            f"{t(lang, 'Manual registration only works when the quota is open. Please wait for a notification or use auto-registration profiles to snatch it automatically!')}",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
 
     # Fetch communes for this wilaya
     await query.edit_message_text(f"✅ Wilaya *{wilaya_name}* selected.\n\n⏳ Fetching communes…", parse_mode="Markdown")
