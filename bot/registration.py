@@ -35,6 +35,7 @@ from telegram.ext import (
 
 from .admin import check_restricted
 from .i18n import t, get_lang
+from . import db as db_mod
 
 logger = logging.getLogger(__name__)
 
@@ -299,12 +300,28 @@ async def on_wilaya_selected(
 async def _fetch_communes(
     context: ContextTypes.DEFAULT_TYPE, wilaya_id: int
 ) -> list[dict]:
+    db_path = context.application.bot_data.get("db_path")
+    if db_path:
+        cached = await db_mod.get_cached_communes(db_path, str(wilaya_id))
+        if cached:
+            logger.debug("Returning cached communes for wilaya %s", wilaya_id)
+            return cached
+
     client = _get_http_client(context)
     headers = _build_headers(context)
     url = f"/api/v1/locations/wilayas/{wilaya_id}/communes"
     resp = await client.get(url, headers=headers)
     resp.raise_for_status()
-    return resp.json()
+    communes = resp.json()
+
+    if db_path and communes:
+        try:
+            await db_mod.save_communes(db_path, str(wilaya_id), communes)
+            logger.debug("Saved %d communes for wilaya %s to cache", len(communes), wilaya_id)
+        except Exception:
+            logger.exception("Failed to save communes to cache")
+
+    return communes
 
 
 def _commune_keyboard(

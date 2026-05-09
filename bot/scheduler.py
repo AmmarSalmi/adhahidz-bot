@@ -75,6 +75,10 @@ async def _poll_once(
                 items = [(s.wilaya_code, s.wilaya_name) for s in statuses.values()]
                 items.sort(key=lambda t: (t[0], t[1]))
                 app.bot_data["wilayas"] = items
+                # Also save to DB cache
+                wilaya_dicts = [{"code": code, "name": name} for code, name in items]
+                await db_mod.save_wilayas(db_path, wilaya_dicts)
+                logger.info("Populated wilaya list and saved to DB from scheduler payload")
             except Exception:
                 logger.exception("Failed updating wilaya list from scheduler payload")
 

@@ -24,6 +24,17 @@ CREATE TABLE IF NOT EXISTS user_settings (
   language    TEXT    NOT NULL DEFAULT 'ar',
   PRIMARY KEY (user_id)
 );
+CREATE TABLE IF NOT EXISTS wilayas (
+  code TEXT NOT NULL PRIMARY KEY,
+  name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS communes (
+  code TEXT NOT NULL PRIMARY KEY,
+  wilaya_code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  FOREIGN KEY (wilaya_code) REFERENCES wilayas(code)
+);
 """
 
 
@@ -230,4 +241,43 @@ async def set_user_language(db_path: str, user_id: int, language: str) -> None:
             )
             await db.commit()
 
+    await _with_retries(_op)
+
+
+async def get_cached_wilayas(db_path: str) -> list[tuple[str, str]]:
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT code, name FROM wilayas ORDER BY code ASC") as cur:
+            rows = await cur.fetchall()
+            return [(str(r[0]), str(r[1])) for r in rows]
+
+
+async def save_wilayas(db_path: str, wilayas: list[dict]) -> None:
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.executemany(
+                "INSERT OR REPLACE INTO wilayas (code, name) VALUES (?, ?)",
+                [(str(w["code"]), str(w["name"])) for w in wilayas],
+            )
+            await db.commit()
+    await _with_retries(_op)
+
+
+async def get_cached_communes(db_path: str, wilaya_code: str) -> list[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            "SELECT code, name, is_active FROM communes WHERE wilaya_code=? ORDER BY name ASC",
+            (wilaya_code,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [{"code": r[0], "name": r[1], "isActive": bool(r[2])} for r in rows]
+
+
+async def save_communes(db_path: str, wilaya_code: str, communes: list[dict]) -> None:
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.executemany(
+                "INSERT OR REPLACE INTO communes (code, wilaya_code, name, is_active) VALUES (?, ?, ?, ?)",
+                [(str(c["code"]), str(wilaya_code), str(c["name"]), 1 if c.get("isActive") else 0) for c in communes],
+            )
+            await db.commit()
     await _with_retries(_op)

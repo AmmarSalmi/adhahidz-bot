@@ -36,10 +36,24 @@ def _configure_logging() -> None:
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 
-async def _load_wilayas(api: QuotaApiClient) -> list[tuple[str, str]]:
+async def _load_wilayas(api: QuotaApiClient, db_path: str | None = None) -> list[tuple[str, str]]:
+    from . import db as db_mod
+    if db_path:
+        cached = await db_mod.get_cached_wilayas(db_path)
+        if cached:
+            return cached
+
     statuses = await api.fetch_wilaya_quotas()
     items = [(s.wilaya_code, s.wilaya_name) for s in statuses.values()]
     items.sort(key=lambda t: (t[0], t[1]))
+    
+    if db_path and items:
+        wilaya_dicts = [{"code": code, "name": name} for code, name in items]
+        try:
+            await db_mod.save_wilayas(db_path, wilaya_dicts)
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to save wilayas to cache")
+
     return items
 
 
@@ -67,7 +81,7 @@ async def _post_init(app: Application) -> None:
     app.bot_data["concurrency_semaphore"] = asyncio.Semaphore(max_concurrent)
 
     try:
-        app.bot_data["wilayas"] = await _load_wilayas(api)
+        app.bot_data["wilayas"] = await _load_wilayas(api, db_path)
     except Exception:
         logger.exception("Failed to load wilaya list from API at startup")
         app.bot_data["wilayas"] = []

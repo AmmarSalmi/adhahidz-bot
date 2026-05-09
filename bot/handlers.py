@@ -56,6 +56,13 @@ async def _ensure_wilayas_loaded(context: ContextTypes.DEFAULT_TYPE) -> list[tup
     if wilayas:
         return wilayas
 
+    db_path = context.application.bot_data.get("db_path")
+    if db_path:
+        cached = await db_mod.get_cached_wilayas(db_path)
+        if cached:
+            context.application.bot_data["wilayas"] = cached
+            return cached
+
     last_try = float(context.application.bot_data.get("wilaya_last_fetch_ts", 0.0) or 0.0)
     now = time.time()
     if now - last_try < _WILAYA_REFRESH_MIN_INTERVAL_S:
@@ -71,6 +78,11 @@ async def _ensure_wilayas_loaded(context: ContextTypes.DEFAULT_TYPE) -> list[tup
         items = [(s.wilaya_code, s.wilaya_name) for s in statuses.values()]
         items.sort(key=lambda t: (t[0], t[1]))
         context.application.bot_data["wilayas"] = items
+        
+        if db_path and items:
+            wilaya_dicts = [{"code": code, "name": name} for code, name in items]
+            await db_mod.save_wilayas(db_path, wilaya_dicts)
+            
         return items
     except Exception:
         logger.exception("Failed to refresh wilaya list on demand")
