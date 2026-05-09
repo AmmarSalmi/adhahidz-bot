@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (user_id)
 );
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id     INTEGER NOT NULL,
+  language    TEXT    NOT NULL DEFAULT 'ar',
+  PRIMARY KEY (user_id)
+);
 """
 
 
@@ -59,10 +64,10 @@ async def init_db(db_path: str) -> None:
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("PRAGMA synchronous=NORMAL;")
         await db.execute("PRAGMA busy_timeout=3000;")
-        await db.execute(CREATE_TABLE_SQL)
+        await db.executescript(CREATE_TABLE_SQL)
         # Also create the profiles table (for auto-registration)
         from .profile_db import CREATE_PROFILES_TABLE_SQL
-        await db.execute(CREATE_PROFILES_TABLE_SQL)
+        await db.executescript(CREATE_PROFILES_TABLE_SQL)
         for migration in [
             "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE profiles ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'CASH';",
@@ -193,6 +198,36 @@ async def reset_notified_for_wilaya(db_path: str, wilaya_code: str) -> None:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA busy_timeout=3000;")
             await db.execute("UPDATE subscriptions SET notified=0 WHERE Wilaya_code=?", (wilaya_code,))
+            await db.commit()
+
+    await _with_retries(_op)
+
+
+async def get_user_language(db_path: str, user_id: int) -> str:
+    """Return user language, defaults to 'ar'."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT language FROM user_settings WHERE user_id=?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return str(row[0]) if row else "ar"
+
+
+async def set_user_language(db_path: str, user_id: int, language: str) -> None:
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute(
+                """
+                INSERT INTO user_settings (user_id, language)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  language=excluded.language
+                """,
+                (user_id, language),
+            )
             await db.commit()
 
     await _with_retries(_op)

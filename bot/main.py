@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
+from .admin import admin_command, on_admin_back, on_admin_stats, on_admin_toggle_restrict
+
 from .api_client import QuotaApiClient
 from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
 from .db import init_db
@@ -25,6 +27,7 @@ from .profile_handlers import (
 )
 from .registration import build_registration_handler
 from .scheduler import start_scheduler
+from .menu import menu_command, on_menu_nav, on_menu_cmd, handle_reply_menu
 
 
 def _configure_logging() -> None:
@@ -131,9 +134,11 @@ def main() -> None:
 
     # Message handlers
     app.add_handler(MessageHandler(filters.REPLY & filters.TEXT, manual_captcha_reply_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_menu))
 
     # Simple command handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("change", change))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stop", stop))
@@ -146,12 +151,20 @@ def main() -> None:
     app.add_handler(CommandHandler("deleteprofile", deleteprofile))
     app.add_handler(CommandHandler("editprofile", editprofile))
 
+    # --- Admin-only handlers (hidden, not in setMyCommands) ---
+    app.add_handler(CommandHandler("adminammar", admin_command))
+    app.add_handler(CallbackQueryHandler(on_admin_stats, pattern=r"^admin:stats$"))
+    app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"))
+    app.add_handler(CallbackQueryHandler(on_admin_toggle_restrict, pattern=r"^admin:toggle_restrict$"))
+
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))
     app.add_handler(CallbackQueryHandler(on_check_profile, pattern=r"^chk_prof:"))
     app.add_handler(CallbackQueryHandler(on_delete_profile, pattern=r"^del_prof:"))
     app.add_handler(CallbackQueryHandler(on_edit_profile_select, pattern=r"^edit_prof:"))
     app.add_handler(CallbackQueryHandler(on_view_profile, pattern=r"^view_prof:"))
+    app.add_handler(CallbackQueryHandler(on_menu_nav, pattern=r"^menu:nav:"))
+    app.add_handler(CallbackQueryHandler(on_menu_cmd, pattern=r"^menu:cmd:"))
 
     app.run_polling(allowed_updates=["message", "callback_query"])
 

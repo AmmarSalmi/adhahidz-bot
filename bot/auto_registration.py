@@ -23,6 +23,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -30,6 +31,7 @@ from . import profile_db
 from .captcha_solver import CaptchaSolver, create_solvers
 from .registration import (
     _build_headers,
+    _close_http_client,
     _extract_error_message,
     _get_http_client,
 )
@@ -359,46 +361,47 @@ async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
     if not api_client:
         return
 
-    client: httpx.AsyncClient = api_client._client  # noqa: SLF001
+    # Create an isolated client for this batch — prevents cookie/session
+    # bleed from login responses leaking into the shared quota-polling client.
+    client: httpx.AsyncClient = api_client.create_session()
     base_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
         "Accept": "application/json",
         "Referer": "https://adhahi.dz/register",
         "Content-Type": "application/json",
     }
-    # Add session cookies
-    parts = [f"{n}={v}" for n, v in client.cookies.items()]
-    if parts:
-        base_headers["Cookie"] = "; ".join(parts)
 
-    # Split by status
-    pending_profiles = [p for p in profiles if p.status == "pending"]
-    registered_profiles = [p for p in profiles if p.status == "registered"]
-    preregistered_profiles = [p for p in profiles if p.status == "pre-registered"]
+    try:
+        # Split by status
+        pending_profiles = [p for p in profiles if p.status == "pending"]
+        registered_profiles = [p for p in profiles if p.status == "registered"]
+        preregistered_profiles = [p for p in profiles if p.status == "pre-registered"]
 
-    # ── Handle pending profiles (existing registration flow) ──
-    if pending_profiles:
-        user_pending: dict[int, list[profile_db.Profile]] = {}
-        for p in pending_profiles:
-            user_pending.setdefault(p.user_id, []).append(p)
+        # ── Handle pending profiles (existing registration flow) ──
+        if pending_profiles:
+            user_pending: dict[int, list[profile_db.Profile]] = {}
+            for p in pending_profiles:
+                user_pending.setdefault(p.user_id, []).append(p)
 
-        for user_id, user_profs in user_pending.items():
-            for p in user_profs:
-                await profile_db.set_profile_status(db_path, p.id, "registering")
-            try:
-                await _process_user_profiles(app, user_id, user_profs, client, base_headers, db_path)
-            except Exception:
-                logger.exception("Auto-registration failed for user %s", user_id)
+            for user_id, user_profs in user_pending.items():
                 for p in user_profs:
-                    await profile_db.set_profile_status(db_path, p.id, "pending")
+                    await profile_db.set_profile_status(db_path, p.id, "registering")
+                try:
+                    await _process_user_profiles(app, user_id, user_profs, client, base_headers, db_path)
+                except Exception:
+                    logger.exception("Auto-registration failed for user %s", user_id)
+                    for p in user_profs:
+                        await profile_db.set_profile_status(db_path, p.id, "pending")
 
-    # ── Handle registered profiles (login + order flow) ──
-    if registered_profiles:
-        await _process_registered_profiles(app, registered_profiles, client, base_headers, db_path)
+        # ── Handle registered profiles (login + order flow) ──
+        if registered_profiles:
+            await _process_registered_profiles(app, registered_profiles, client, base_headers, db_path)
 
-    # ── Handle pre-registered profiles (resend OTP + urgent notify, non-blocking) ──
-    if preregistered_profiles:
-        await _nudge_preregistered_profiles(app, preregistered_profiles, client, base_headers)
+        # ── Handle pre-registered profiles (resend OTP + urgent notify, non-blocking) ──
+        if preregistered_profiles:
+            await _nudge_preregistered_profiles(app, preregistered_profiles, client, base_headers)
+    finally:
+        await client.aclose()
 
 
 async def _nudge_preregistered_profiles(
@@ -474,17 +477,14 @@ async def _process_registered_profiles(
     base_headers: dict[str, str],
     db_path: str,
 ) -> None:
-    """Handle registered profiles: login + submit order sequentially.
+    """Handle registered profiles: login + submit order concurrently.
 
-    Sequential processing avoids firing multiple captcha solvers in parallel
-    and wasting paid 2captcha credits.
+    Concurrent processing ensures all profiles attempt to secure quota simultaneously.
     """
-    results: list[tuple | Exception] = []
-    for p in profiles:
-        try:
-            results.append(await _try_login_and_order(p, client, base_headers))
-        except Exception as exc:
-            results.append(exc)
+    results = await asyncio.gather(
+        *[_try_login_and_order(p, client, base_headers) for p in profiles],
+        return_exceptions=True
+    )
 
     for result in results:
         if isinstance(result, Exception):
@@ -546,19 +546,16 @@ async def _process_user_profiles(
     base_headers: dict[str, str],
     db_path: str,
 ) -> None:
-    """Phase 1: sequential auto-CAPTCHA.  Phase 2: sequential manual fallback.
+    """Phase 1: concurrent auto-CAPTCHA. Phase 2: sequential manual fallback.
 
-    Sequential processing ensures the ddddocr→2captcha cascade works properly
-    per profile without parallel solver invocations.
+    Concurrent processing ensures all profiles attempt to secure quota simultaneously.
     """
 
-    # ── Phase 1: Sequential auto-CAPTCHA ──
-    results: list[tuple | Exception] = []
-    for p in profiles:
-        try:
-            results.append(await _try_submit_profile(p, client, base_headers))
-        except Exception as exc:
-            results.append(exc)
+    # ── Phase 1: Concurrent auto-CAPTCHA ──
+    results = await asyncio.gather(
+        *[_try_submit_profile(p, client, base_headers) for p in profiles],
+        return_exceptions=True
+    )
 
     remaining: list[profile_db.Profile] = []
     ip_blocked = False
@@ -928,14 +925,14 @@ async def verifyotp_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     pre_registered = await profile_db.get_profiles_by_status(db_path, user_id, "pre-registered")
     submitted = submitted + pre_registered
     if not submitted:
-        await update.message.reply_text("No profiles awaiting OTP verification.")
+        await update.effective_message.reply_text("No profiles awaiting OTP verification.")
         return ConversationHandler.END
 
     if len(submitted) == 1:
         # Jump straight to OTP prompt
         context.user_data["verify_otp"] = {"profile": submitted[0]}
         masked = f"{submitted[0].nin[:4]}…{submitted[0].nin[-4:]}"
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"📱 *OTP Verification*\n\n"
             f"Profile: *{submitted[0].name or masked}*\n"
             f"Phone: `{submitted[0].phone}`\n\n"
@@ -951,7 +948,7 @@ async def verifyotp_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         masked = f"{p.nin[:4]}…{p.nin[-4:]}"
         lines.append(f"  `{p.id}` — *{p.name or masked}* ({p.phone})")
     lines.append("\nReply with the profile ID number:")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     context.user_data["verify_otp"] = {"profiles": submitted}
     return VERIFY_OTP_CAPTCHA
@@ -1052,6 +1049,7 @@ async def verifyotp_handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if 200 <= resp.status_code < 300:
             await _complete_post_otp_flow(update, context, profile, resp, db_path)
             context.user_data.pop("verify_otp", None)
+            await _close_http_client(context)
             return ConversationHandler.END
 
         error_detail = _extract_error_message(resp)
@@ -1062,6 +1060,7 @@ async def verifyotp_handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not captcha:
         await update.message.reply_text("❌ Could not generate CAPTCHA. Try /verifyotp again later.")
         context.user_data.pop("verify_otp", None)
+        await _close_http_client(context)
         return ConversationHandler.END
 
     captcha_id, image_bytes = captcha
@@ -1123,11 +1122,13 @@ async def verifyotp_captcha_answer(update: Update, context: ContextTypes.DEFAULT
         )
 
     context.user_data.pop("verify_otp", None)
+    await _close_http_client(context)
     return ConversationHandler.END
 
 
 async def verifyotp_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("verify_otp", None)
+    await _close_http_client(context)
     await update.effective_message.reply_text("OTP verification cancelled.")
     return ConversationHandler.END
 
@@ -1137,7 +1138,10 @@ async def verifyotp_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def build_verifyotp_handler() -> ConversationHandler:
     """ConversationHandler for /verifyotp flow."""
     return ConversationHandler(
-        entry_points=[CommandHandler("verifyotp", verifyotp_start)],
+        entry_points=[
+            CommandHandler("verifyotp", verifyotp_start),
+            CallbackQueryHandler(verifyotp_start, pattern=r"^menu:cmd:verifyotp$"),
+        ],
         states={
             VERIFY_OTP_CAPTCHA: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, verifyotp_handle),

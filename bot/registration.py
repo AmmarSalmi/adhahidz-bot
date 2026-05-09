@@ -33,6 +33,8 @@ from telegram.ext import (
     filters,
 )
 
+from .admin import check_restricted
+
 logger = logging.getLogger(__name__)
 
 # Conversation states
@@ -70,29 +72,40 @@ _REG_HEADERS = {
 
 
 def _get_http_client(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
-    """Return the bot's existing httpx client."""
+    """Return a per-user httpx client for registration flows.
+
+    Each user gets their own client with an isolated cookie jar,
+    preventing session/cookie bleed between different Telegram users.
+    The client is cached in ``context.user_data`` and reused across
+    the same user's requests.
+    """
+    client = context.user_data.get("_reg_client")
+    if client is not None and not client.is_closed:
+        return client
+
     api = context.application.bot_data.get("api_client")
     if api is None:
         raise RuntimeError("API client not initialized")
-    return api._client  # noqa: SLF001 — we need the underlying httpx client
+
+    client = api.create_session()
+    context.user_data["_reg_client"] = client
+    return client
 
 
-def _session_cookie(context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Extract the session cookie from the httpx client's cookie jar."""
-    client = _get_http_client(context)
-    cookies = client.cookies
-    # Build a cookie header string from whatever cookies exist
-    parts = [f"{name}={value}" for name, value in cookies.items()]
-    return "; ".join(parts)
+async def _close_http_client(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Close and discard the per-user registration client, if any."""
+    client = context.user_data.pop("_reg_client", None)
+    if client is not None and not client.is_closed:
+        await client.aclose()
 
 
 def _build_headers(context: ContextTypes.DEFAULT_TYPE) -> dict[str, str]:
-    """Build request headers with the session cookie."""
-    headers = dict(_REG_HEADERS)
-    cookie = _session_cookie(context)
-    if cookie:
-        headers["Cookie"] = cookie
-    return headers
+    """Build standard request headers for registration endpoints.
+
+    Cookie management is handled automatically by each user's isolated
+    httpx client — no manual cookie forwarding needed.
+    """
+    return dict(_REG_HEADERS)
 
 
 def _reg_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
@@ -106,6 +119,8 @@ def _reg_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
 
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry: /register command — start the forced registration flow."""
+    if await check_restricted(update, context):
+        return ConversationHandler.END
     # Reset any previous state
     context.user_data["reg"] = {}
     await update.effective_message.reply_text(
@@ -671,6 +686,7 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     # Clean up session state
     context.user_data.pop("reg", None)
+    await _close_http_client(context)
     return ConversationHandler.END
 
 
@@ -678,6 +694,7 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("reg", None)
+    await _close_http_client(context)
     await update.effective_message.reply_text(
         "Registration cancelled. You can start again with /register."
     )
@@ -689,7 +706,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def build_registration_handler() -> ConversationHandler:
     """Create and return the ConversationHandler for the registration flow."""
     return ConversationHandler(
-        entry_points=[CommandHandler("register", register_start)],
+        entry_points=[
+            CommandHandler("register", register_start),
+            CallbackQueryHandler(register_start, pattern=r"^menu:cmd:register$"),
+        ],
         states={
             ASK_NIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_nin)],
             ASK_CNIBE: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_cnibe)],

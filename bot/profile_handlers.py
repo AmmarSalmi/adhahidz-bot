@@ -15,7 +15,9 @@ from telegram.ext import (
 )
 
 from . import profile_db
+from .admin import check_restricted
 from .registration import _validate_password
+from .i18n import t, get_lang
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,8 @@ def _ap_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
 # ─── /addprofile ──────────────────────────────────────────────────────────────
 
 async def addprofile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await check_restricted(update, context):
+        return ConversationHandler.END
     context.user_data["add_profile"] = {}
     await update.effective_message.reply_text(
         "📋 *Add Registration Profile*\n\n"
@@ -331,7 +335,10 @@ async def ap_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def build_addprofile_handler() -> ConversationHandler:
     return ConversationHandler(
-        entry_points=[CommandHandler("addprofile", addprofile_start)],
+        entry_points=[
+            CommandHandler("addprofile", addprofile_start),
+            CallbackQueryHandler(addprofile_start, pattern=r"^menu:cmd:addprofile$"),
+        ],
         states={
             AP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_collect_name)],
             AP_NIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_collect_nin)],
@@ -352,13 +359,16 @@ def build_addprofile_handler() -> ConversationHandler:
 # ─── /profiles ────────────────────────────────────────────────────────────────
 
 async def list_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_restricted(update, context):
+        return
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     profiles = await profile_db.get_profiles(db_path, user_id)
 
     if not profiles:
         await update.effective_message.reply_text(
-            "No profiles found. Use /addprofile to create one."
+            t(lang, "No profiles found. Use /addprofile to create one.")
         )
         return
 
@@ -378,12 +388,15 @@ async def list_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ─── /viewprofile ─────────────────────────────────────────────────────────────
 
 async def viewprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_restricted(update, context):
+        return
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     profiles = await profile_db.get_profiles(db_path, user_id)
 
     if not profiles:
-        await update.effective_message.reply_text("No profiles to view.")
+        await update.effective_message.reply_text(t(lang, "No profiles to view."))
         return
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -396,7 +409,7 @@ async def viewprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         ])
     await update.effective_message.reply_text(
-        "Select a profile to *view full details*:",
+        t(lang, "Select a profile to *view full details*:"),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -413,8 +426,9 @@ async def on_view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
 
     profile = await profile_db.get_profile(db_path, profile_id, user_id)
+    lang = await get_lang(context, user_id)
     if not profile:
-        await query.edit_message_text("❌ Profile not found.")
+        await query.edit_message_text(t(lang, "❌ Profile not found."))
         return
 
     pm_label = _PAYMENT_METHODS.get(profile.payment_method, profile.payment_method)
@@ -438,12 +452,15 @@ async def on_view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ─── /deleteprofile ───────────────────────────────────────────────────────────
 
 async def deleteprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_restricted(update, context):
+        return
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     profiles = await profile_db.get_profiles(db_path, user_id)
 
     if not profiles:
-        await update.effective_message.reply_text("No profiles to delete.")
+        await update.effective_message.reply_text(t(lang, "No profiles to delete."))
         return
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -456,7 +473,7 @@ async def deleteprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         ])
     await update.effective_message.reply_text(
-        "Select a profile to *delete*:",
+        t(lang, "Select a profile to *delete*:"),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -482,12 +499,15 @@ async def on_delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ─── /editprofile ─────────────────────────────────────────────────────────────
 
 async def editprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_restricted(update, context):
+        return
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     profiles = await profile_db.get_profiles(db_path, user_id)
 
     if not profiles:
-        await update.effective_message.reply_text("No profiles to edit.")
+        await update.effective_message.reply_text(t(lang, "No profiles to edit."))
         return
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -500,7 +520,7 @@ async def editprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         ])
     await update.effective_message.reply_text(
-        "Select a profile to *edit*:",
+        t(lang, "Select a profile to *edit*:"),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -655,12 +675,12 @@ async def on_edit_payment_method(update: Update, context: ContextTypes.DEFAULT_T
     profile_id = int(parts[1])
     method = parts[2]
 
-    if method not in _PAYMENT_METHODS:
-        await query.edit_message_text("❌ Invalid payment method. Try again.")
-        return EDIT_WAITING_VALUE
-
-    db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
+
+    if method not in _PAYMENT_METHODS:
+        await query.edit_message_text(t(lang, "❌ Invalid payment method. Try again."))
+        return EDIT_WAITING_VALUE
 
     try:
         await profile_db.update_profile_field(db_path, profile_id, user_id, "payment_method", method)
@@ -692,8 +712,10 @@ async def on_edit_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     status = parts[2]
 
     valid_statuses = {"pending", "pre-registered", "registered", "ordered"}
+    user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     if status not in valid_statuses:
-        await query.edit_message_text("❌ Invalid status. Try again.")
+        await query.edit_message_text(t(lang, "❌ Invalid status. Try again."))
         return EDIT_WAITING_VALUE
 
     db_path: str = context.application.bot_data["db_path"]
@@ -719,7 +741,8 @@ async def on_edit_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("edit_profile_id", None)
     context.user_data.pop("edit_field", None)
-    await update.effective_message.reply_text("Edit cancelled.")
+    lang = await get_lang(context, update.effective_user.id)
+    await update.effective_message.reply_text(t(lang, "Edit cancelled."))
     return ConversationHandler.END
 
 
@@ -747,12 +770,15 @@ REORDER_WAITING = 200
 
 
 async def reorder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await check_restricted(update, context):
+        return ConversationHandler.END
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     profiles = await profile_db.get_profiles(db_path, user_id)
 
     if len(profiles) < 2:
-        await update.effective_message.reply_text("You need at least 2 profiles to reorder.")
+        await update.effective_message.reply_text(t(lang, "You need at least 2 profiles to reorder."))
         return ConversationHandler.END
 
     lines = ["Current order:\n"]
@@ -777,7 +803,8 @@ async def reorder_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     try:
         new_order = [int(x) for x in text.split()]
     except ValueError:
-        await update.message.reply_text("❌ Enter profile IDs as numbers separated by spaces.")
+        lang = await get_lang(context, update.effective_user.id)
+        await update.message.reply_text(t(lang, "❌ Enter profile IDs as numbers separated by spaces."))
         return REORDER_WAITING
 
     if set(new_order) != valid_ids:
@@ -803,7 +830,10 @@ async def reorder_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def build_reorder_handler() -> ConversationHandler:
     return ConversationHandler(
-        entry_points=[CommandHandler("reorder", reorder_start)],
+        entry_points=[
+            CommandHandler("reorder", reorder_start),
+            CallbackQueryHandler(reorder_start, pattern=r"^menu:cmd:reorder$"),
+        ],
         states={
             REORDER_WAITING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, reorder_input),

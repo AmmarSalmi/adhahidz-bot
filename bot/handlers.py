@@ -9,27 +9,16 @@ from telegram.ext import ContextTypes
 
 from . import db as db_mod
 from . import profile_db
+from .admin import ADMIN_TELEGRAM_ID, check_restricted, is_admin
 from .api_client import QuotaStatus
 from .captcha_solver import LocalOcrSolver, TwoCaptchaSolver
 from .registration import _build_headers, _get_http_client
+from .i18n import t, get_lang
 
 # Canonical list of bot commands — used by the /help handler and set_my_commands.
 BOT_COMMANDS = [
     ("start", "Subscribe to wilaya quota notifications"),
-    ("change", "Change your subscribed wilaya"),
-    ("status", "Check your current subscription status"),
-    ("stop", "Unsubscribe from notifications"),
-    ("fetchinfo", "Last fetch time & watched wilayas"),
-    ("register", "Manual adhahi.dz registration flow"),
-    ("addprofile", "Add an auto-registration profile"),
-    ("profiles", "List your registration profiles"),
-    ("editprofile", "Edit a registration profile"),
-    ("deleteprofile", "Delete a registration profile"),
-    ("viewprofile", "View full profile details (incl. password)"),
-    ("reorder", "Change profile priority order"),
-    ("verifyotp", "Verify OTP for a submitted profile"),
-    ("checkprofile", "Check if a profile NIN is registered on server"),
-    ("testcaptchasolvers", "Test both CAPTCHA solvers side-by-side"),
+    ("menu", "Open the interactive main menu"),
     ("help", "Show all available commands"),
 ]
 
@@ -89,45 +78,62 @@ async def _ensure_wilayas_loaded(context: ContextTypes.DEFAULT_TYPE) -> list[tup
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lang = await get_lang(context, update.effective_user.id)
+    from .menu import get_reply_main_menu_keyboard
+    
+    # Send the main menu keyboard first
+    await update.effective_message.reply_text(
+        t(lang, "📱 *Main Menu*"),
+        reply_markup=get_reply_main_menu_keyboard(lang),
+        parse_mode="Markdown"
+    )
+
     wilayas = await _ensure_wilayas_loaded(context)
     if not wilayas:
         await update.effective_message.reply_text(
-            "Welcome! I couldn't load the Wilaya list yet (API unavailable). Send /change later to try again."
+            t(lang, "Welcome! I couldn't load the Wilaya list yet (API unavailable). Send /change later to try again.")
         )
         return
 
     await update.effective_message.reply_text(
-        "Welcome! Choose your Wilaya to receive quota notifications:",
+        t(lang, "Welcome! Choose your Wilaya to receive quota notifications:"),
         reply_markup=_wilaya_keyboard(wilayas),
     )
 
 
 async def change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lang = await get_lang(context, update.effective_user.id)
     wilayas = await _ensure_wilayas_loaded(context)
     if not wilayas:
-        await update.effective_message.reply_text("Wilaya list not available yet. Please try again later.")
+        await update.effective_message.reply_text(t(lang, "Wilaya list not available yet. Please try again later."))
         return
 
-    await update.effective_message.reply_text("Choose your Wilaya:", reply_markup=_wilaya_keyboard(wilayas))
+    await update.effective_message.reply_text(t(lang, "Choose your Wilaya:"), reply_markup=_wilaya_keyboard(wilayas))
 
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_restricted(update, context):
+        return
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     deleted = await db_mod.delete_subscription(db_path, user_id)
     if deleted:
-        await update.effective_message.reply_text("You have been unsubscribed.")
+        await update.effective_message.reply_text(t(lang, "You have been unsubscribed."))
     else:
-        await update.effective_message.reply_text("You are not subscribed.")
+        await update.effective_message.reply_text(t(lang, "You are not subscribed."))
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_restricted(update, context):
+        return
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
 
     sub = await db_mod.get_subscription(db_path, user_id)
     if not sub:
-        await update.effective_message.reply_text("You are not subscribed. Send /start to subscribe.")
+        await update.effective_message.reply_text(t(lang, "You are not subscribed. Send /start to subscribe."))
         return
 
     wilaya_name = _lookup_wilaya_name(context, sub.wilaya_code)
@@ -149,6 +155,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the last successful quota fetch time and all watched wilayas."""
+    if await check_restricted(update, context):
+        return
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
 
@@ -183,8 +191,9 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     all_codes = sub_codes | prof_codes
 
+    lang = await get_lang(context, user_id)
     if not all_codes:
-        watched_section = "_No wilayas are currently being watched._"
+        watched_section = t(lang, "_No wilayas are currently being watched._")
     else:
         rows = []
         for code in sorted(all_codes):
@@ -199,13 +208,25 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     msg = (
         f"{fetch_line}\n\n"
-        f"👁 *Watched wilayas:*\n{watched_section}"
+        f"{t(lang, '👁 *Watched wilayas:*\\n')}{watched_section}"
     )
     await update.effective_message.reply_text(msg, parse_mode="Markdown")
 
 
 async def test_captcha_solvers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch 5 CAPTCHAs and solve with both ddddocr and 2captcha for comparison."""
+    if not is_admin(update):
+        user = update.effective_user
+        lang = await get_lang(context, user.id)
+        if ADMIN_TELEGRAM_ID:
+            await context.bot.send_message(
+                chat_id=ADMIN_TELEGRAM_ID,
+                text=f"⚠️ *Unauthorized Access Attempt*\nUser [{user.first_name}](tg://user?id={user.id}) (ID: `{user.id}`) tried to use `/testcaptchasolvers`.",
+                parse_mode="Markdown"
+            )
+        await update.message.reply_text(t(lang, "⛔ This command is restricted to the administrator to prevent resource waste."))
+        return
+
     import base64
     import io
     import os
@@ -282,12 +303,15 @@ async def test_captcha_solvers(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def checkprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show all profiles as inline buttons for the user to check registration status."""
+    if await check_restricted(update, context):
+        return
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     db_path: str = context.application.bot_data["db_path"]
 
     profiles = await profile_db.get_profiles(db_path, user_id)
     if not profiles:
-        await update.message.reply_text("You have no profiles. Use /addprofile first.")
+        await update.message.reply_text(t(lang, "You have no profiles. Use /addprofile first."))
         return
 
     buttons = []
@@ -316,11 +340,12 @@ async def on_check_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     profile_id = int(data.split(":", 1)[1])
     user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
     db_path: str = context.application.bot_data["db_path"]
 
     profile = await profile_db.get_profile(db_path, profile_id, user_id)
     if not profile:
-        await query.edit_message_text("Profile not found.")
+        await query.edit_message_text(t(lang, "Profile not found."))
         return
 
     masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
@@ -381,10 +406,11 @@ async def on_check_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lines = ["📖 *Available Commands*\n"]
+    lang = await get_lang(context, update.effective_user.id)
+    lines = [t(lang, "📖 *Available Commands*\n")]
     for cmd, desc in BOT_COMMANDS:
         lines.append(f"/{cmd} — {desc}")
-    lines.append("\n/cancel — Cancel an in-progress registration")
+    lines.append(t(lang, "\n/cancel — Cancel an in-progress registration"))
     await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -404,5 +430,16 @@ async def on_wilaya_selected(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await db_mod.set_subscription(db_path, user_id, wilaya_code)
 
+    lang = await get_lang(context, user_id)
     wilaya_name = _lookup_wilaya_name(context, wilaya_code)
-    await query.edit_message_text(f"You will be notified when quota is available in {wilaya_name}.")
+    # Translate this specific string manually or leave it as is if it's dynamic
+    # "You will be notified when quota is available in {wilaya_name}."
+    # I'll just keep it simple since it's dynamic, I'll add a quick inline translation.
+    if lang == "ar":
+        text = f"سيتم إشعارك عندما تتوفر الحصة في {wilaya_name}."
+    elif lang == "fr":
+        text = f"Vous serez notifié lorsque le quota sera disponible à {wilaya_name}."
+    else:
+        text = f"You will be notified when quota is available in {wilaya_name}."
+        
+    await query.edit_message_text(text)

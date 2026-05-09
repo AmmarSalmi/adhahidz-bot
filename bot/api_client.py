@@ -175,6 +175,24 @@ class QuotaApiClient:
             follow_redirects=True,
         )
 
+    def create_session(self) -> httpx.AsyncClient:
+        """Create an isolated HTTP client for user-specific operations.
+
+        Each call returns a NEW client with its own cookie jar, preventing
+        session/cookie bleed between different Telegram users.  The caller
+        is responsible for closing the client when done.
+        """
+        return httpx.AsyncClient(
+            base_url=self._base_url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+                "Referer": "https://adhahi.dz/register",
+            },
+            timeout=httpx.Timeout(self._timeout),
+            follow_redirects=True,
+        )
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
