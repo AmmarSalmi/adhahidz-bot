@@ -61,7 +61,7 @@ async def addprofile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     profiles = await profile_db.get_profiles(db_path, user_id)
     if len(profiles) >= 3:
         await update.effective_message.reply_text(
-            t(lang, "❌ You have reached the maximum limit of 3 profiles. Please delete an existing profile to add a new one."),
+            t(lang, "⚠️ *Profile Limit Reached*\n\nTo ensure fair access, we are restricting all users to a maximum of 3 profiles. Please delete an existing profile manually using /profiles to add a new one."),
             parse_mode="Markdown"
         )
         return ConversationHandler.END

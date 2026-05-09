@@ -29,6 +29,7 @@ from telegram.ext import (
 
 from . import profile_db
 from .captcha_solver import CaptchaSolver, create_solvers
+from .proxy import get_proxy_url
 from .registration import (
     _build_headers,
     _close_http_client,
@@ -366,9 +367,15 @@ async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
     if not api_client:
         return
 
+    # Check if proxy is enabled via admin panel
+    use_proxy = app.bot_data.get("use_proxy", False)
+    proxy_url = get_proxy_url() if use_proxy else None
+    if use_proxy and not proxy_url:
+        logger.warning("Proxy is enabled in Admin Panel, but credentials (PROXY_USER/PROXY_PASS) are missing from .env!")
+
     # Create an isolated client for this batch — prevents cookie/session
     # bleed from login responses leaking into the shared quota-polling client.
-    client: httpx.AsyncClient = api_client.create_session()
+    client: httpx.AsyncClient = api_client.create_session(proxy_url=proxy_url)
     base_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
         "Accept": "application/json",

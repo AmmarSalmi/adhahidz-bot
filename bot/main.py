@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict
+from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy
 
 from .api_client import QuotaApiClient
 from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
@@ -76,9 +76,10 @@ async def _post_init(app: Application) -> None:
     )
     app.bot_data["scheduler"] = scheduler
 
-    if not os.path.exists(".excess_notified"):
+    notif_flag_path = os.path.join(os.path.dirname(db_path), ".excess_notified")
+    if not os.path.exists(notif_flag_path):
         import asyncio
-        async def notify_excess_profiles(app_ref, path):
+        async def notify_excess_profiles(app_ref, path, flag_path):
             from . import profile_db
             try:
                 user_profiles = await profile_db.get_all_profiles_grouped_by_user(path)
@@ -100,12 +101,12 @@ async def _post_init(app: Application) -> None:
                             )
                         except Exception:
                             logger.exception("Failed to send notice to user %s", user_id)
-                with open(".excess_notified", "w") as f:
+                with open(flag_path, "w") as f:
                     f.write("done")
             except Exception:
                 logger.exception("Failed to notify excess profiles")
         
-        asyncio.create_task(notify_excess_profiles(app, db_path))
+        asyncio.create_task(notify_excess_profiles(app, db_path, notif_flag_path))
 
     # Register the bot menu button with Telegram
     await app.bot.set_my_commands(
@@ -188,6 +189,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_stats, pattern=r"^admin:stats$"))
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_restrict, pattern=r"^admin:toggle_restrict$"))
+    app.add_handler(CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy$"))
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))

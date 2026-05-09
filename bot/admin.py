@@ -14,6 +14,7 @@ friendly "access is restricted" message.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -30,12 +31,14 @@ from telegram.ext import (
 )
 
 from .db import get_user_language
+from .proxy import get_proxy_url
 
 logger = logging.getLogger(__name__)
 
 # Conversation states for broadcasting
 AWAIT_BROADCAST_MESSAGE = 1
 AWAIT_BROADCAST_CONFIRM = 2
+AWAIT_PROXY_TEST_CONFIG = 3
 
 # ---------------------------------------------------------------------------
 # Admin identity — loaded once from env at import time
@@ -83,6 +86,11 @@ def is_restricted_mode(context) -> bool:
     return bool(context.application.bot_data.get("restricted_mode", False))
 
 
+def is_proxy_enabled(context) -> bool:
+    """Return True if the bot is configured to use the Databay proxy."""
+    return bool(context.application.bot_data.get("use_proxy", False))
+
+
 async def check_restricted(update: Update, context) -> bool:
     """Guard for non-admin users when restricted mode is active.
 
@@ -117,8 +125,19 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     keyboard = _admin_keyboard(context)
+    
+    warning = ""
+    host = os.getenv("PROXY_HOST", "gw.databay.co")
+    port = os.getenv("PROXY_PORT", "8888")
+    is_standard = host in ("gw.databay.co", "eu-gw.databay.co") and port == "8888"
+    if not is_standard:
+        warning = (
+            "\n\n⚠️ *Warning: Proxy Config*\n"
+            f"Host `{host}:{port}` deviates from Databay defaults (`gw.databay.co:8888`)."
+        )
+
     await update.effective_message.reply_text(
-        "👑 *Admin Panel*\n\nWelcome back, boss.",
+        f"👑 *Admin Panel*\n\nWelcome back, boss.{warning}",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -203,14 +222,20 @@ async def on_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ---------------------------------------------------------------------------
 
 def _admin_keyboard(context) -> InlineKeyboardMarkup:
-    """Build the admin panel keyboard with the current restricted-mode state."""
+    """Build the admin panel keyboard with current states."""
     restricted = is_restricted_mode(context)
-    toggle_label = "🔓 Unrestrict Users" if restricted else "🔒 Restrict Users"
+    proxy = is_proxy_enabled(context)
+    
+    toggle_restrict = "🔓 Unrestrict Users" if restricted else "🔒 Restrict Users"
+    toggle_proxy = "🌐 Proxy: ON" if proxy else "🌐 Proxy: OFF"
+    
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
             [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
-            [InlineKeyboardButton(toggle_label, callback_data="admin:toggle_restrict")],
+            [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
+            [InlineKeyboardButton(toggle_proxy, callback_data="admin:toggle_proxy")],
+            [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
         ]
     )
 
@@ -248,6 +273,200 @@ async def on_admin_toggle_restrict(
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
+
+
+async def on_admin_toggle_proxy(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Toggle proxy usage for auto-registration."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    current = is_proxy_enabled(context)
+    context.application.bot_data["use_proxy"] = not current
+    new_state = not current
+
+    logger.info("Admin toggled use_proxy → %s", new_state)
+
+    status_emoji = "🌐"
+    status_text = "ENABLED (Databay)" if new_state else "DISABLED (Bypass)"
+
+    keyboard = _admin_keyboard(context)
+    await query.edit_message_text(
+        f"👑 *Admin Panel*\n\n"
+        f"{status_emoji} Databay Proxy: *{status_text}*\n"
+        f"_Applied only to auto-registration flow._",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_test_proxy(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Start the proxy test configuration flow."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Cancel", callback_data="admin:broadcast_cancel")]]
+    )
+    await query.edit_message_text(
+        "🧪 *Proxy Test Configuration*\n\n"
+        "Please enter the test parameters in the format:\n"
+        "`TotalAttempts|BatchSize|IntervalSeconds`\n\n"
+        "Example: `20|5|60` (20 total, batches of 5, every 60s)",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return AWAIT_PROXY_TEST_CONFIG
+
+
+async def on_admin_proxy_test_config_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Parse proxy test config and start the task."""
+    if not is_admin(update):
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_PROXY_TEST_CONFIG
+
+    try:
+        parts = [int(p.strip()) for p in msg.text.split("|")]
+        if len(parts) != 3:
+            raise ValueError("Need exactly 3 parts")
+        total, batch_size, interval = parts
+        if total <= 0 or batch_size <= 0 or interval < 0:
+            raise ValueError("Values must be positive")
+    except ValueError:
+        await msg.reply_text("❌ *Invalid Format*\n\nPlease use: `Total|Batch|Interval` (e.g. `10|1|30`)", parse_mode="Markdown")
+        return AWAIT_PROXY_TEST_CONFIG
+
+    proxy_url = get_proxy_url()
+    if not proxy_url:
+        await msg.reply_text("❌ Proxy credentials missing in `.env`.")
+        return ConversationHandler.END
+
+    # Start the task
+    asyncio.create_task(_run_proxy_test(
+        app=context.application,
+        user_id=update.effective_user.id,
+        proxy_url=proxy_url,
+        total=total,
+        batch_size=batch_size,
+        interval=interval
+    ))
+
+    await msg.reply_text(
+        f"✅ *Proxy Test Queued*\n\n"
+        f"Total: {total}\n"
+        f"Batch Size: {batch_size}\n"
+        f"Interval: {interval}s",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def _run_proxy_test(
+    app, 
+    user_id: int, 
+    proxy_url: str,
+    total: int = 10,
+    batch_size: int = 1,
+    interval: int = 30
+) -> None:
+    """Background task with custom concurrency and interval."""
+    import time
+    
+    api_client = app.bot_data.get("api_client")
+    if not api_client:
+        return
+
+    success_count = 0
+    results = []
+    
+    status_msg = await app.bot.send_message(
+        chat_id=user_id,
+        text=f"🧪 *Proxy Test Progress: 0/{total}*...",
+        parse_mode="Markdown"
+    )
+
+    completed = 0
+    while completed < total:
+        current_batch_size = min(batch_size, total - completed)
+        tasks = []
+        
+        # Prepare batch
+        for i in range(current_batch_size):
+            attempt_num = completed + i + 1
+            tasks.append(_single_proxy_attempt(api_client, proxy_url, attempt_num))
+        
+        # Execute batch concurrently
+        batch_results = await asyncio.gather(*tasks)
+        
+        for success, text in batch_results:
+            if success:
+                success_count += 1
+            results.append(text)
+        
+        completed += current_batch_size
+        
+        # Update progress
+        try:
+            summary = f"🧪 *Proxy Test Progress: {completed}/{total}*\nSuccesses: {success_count}"
+            if results:
+                summary += f"\nLast result: {results[-1]}"
+            await status_msg.edit_text(summary, parse_mode="Markdown")
+        except Exception:
+            pass
+
+        if completed < total:
+            await asyncio.sleep(interval)
+
+    # Final report
+    final_text = [
+        f"🧪 *Proxy Test Result: {success_count}/{total} Success*",
+        "",
+        "\n".join(results[-20:]), # Show last 20 results if too many
+    ]
+    if len(results) > 20:
+        final_text.insert(2, f"_(Showing last 20 of {total} attempts)_")
+    
+    final_text.append("\n✅ Test complete.")
+    
+    try:
+        await status_msg.edit_text("\n".join(final_text), parse_mode="Markdown")
+    except Exception:
+        await app.bot.send_message(chat_id=user_id, text="\n".join(final_text), parse_mode="Markdown")
+
+
+async def _single_proxy_attempt(api_client, proxy_url: str, attempt_num: int) -> tuple[bool, str]:
+    """Perform a single proxied request."""
+    import time
+    try:
+        client = api_client.create_session(proxy_url=proxy_url)
+        try:
+            path = f"/api/v1/public/wilaya-quotas?_t={int(time.time() * 1000)}"
+            resp = await client.get(path)
+            resp.raise_for_status()
+            return True, f"Attempt {attempt_num}: ✅ Success (HTTP {resp.status_code})"
+        finally:
+            await client.aclose()
+    except Exception as e:
+        logger.error("Proxy test attempt %d failed: %s", attempt_num, e)
+        return False, f"Attempt {attempt_num}: ❌ Failed ({type(e).__name__})"
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +614,10 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
 def build_admin_broadcast_handler() -> ConversationHandler:
     """Build the conversation handler for admin broadcasting."""
     return ConversationHandler(
-        entry_points=[CallbackQueryHandler(on_admin_broadcast_start, pattern=r"^admin:broadcast_start$")],
+        entry_points=[
+            CallbackQueryHandler(on_admin_broadcast_start, pattern=r"^admin:broadcast_start$"),
+            CallbackQueryHandler(on_admin_test_proxy, pattern=r"^admin:test_proxy$")
+        ],
         states={
             AWAIT_BROADCAST_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_broadcast_message_received),
@@ -403,6 +625,10 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             ],
             AWAIT_BROADCAST_CONFIRM: [
                 CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_confirm_yes|admin:broadcast_cancel$")
+            ],
+            AWAIT_PROXY_TEST_CONFIG: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_proxy_test_config_received),
+                CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
             ],
         },
         fallbacks=[

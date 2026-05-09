@@ -175,7 +175,7 @@ class QuotaApiClient:
             follow_redirects=True,
         )
 
-    def create_session(self) -> httpx.AsyncClient:
+    def create_session(self, proxy_url: str | None = None) -> httpx.AsyncClient:
         """Create an isolated HTTP client for user-specific operations.
 
         Each call returns a NEW client with its own cookie jar, preventing
@@ -191,6 +191,7 @@ class QuotaApiClient:
             },
             timeout=httpx.Timeout(self._timeout),
             follow_redirects=True,
+            proxy=proxy_url,
         )
 
     async def aclose(self) -> None:
