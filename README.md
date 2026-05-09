@@ -11,7 +11,8 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
 - **Profile Usage Limits**: Enforces a fair-usage limit of 3 registration profiles per user to ensure system stability and performance.
-- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, and **granular proxy controls**. Commands like `/checkprofile` are restricted to administrators.
+- **Quota History & Analysis**: Automatically records every "OPEN" and "CLOSE" event for all Wilayas in the database. This data allows for analyzing quota patterns, measuring window durations, and understanding the frequency of availability changes. Recent history is visible directly in the admin stats panel.
+- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, **granular proxy controls**, and **recent quota event history**. Commands like `/checkprofile` are restricted to administrators.
 - **Granular Proxy Management**: Admin can independently toggle Databay residential proxy usage for three critical workflows: Wilaya quota monitoring, Automated registration/ordering, and Profile status checking.
 
 ### Prerequisites

@@ -69,9 +69,20 @@ async def _poll_once(
         # Stamp the last successful fetch timestamp so /fetchinfo can report it
         app.bot_data["last_fetch_ts"] = now
 
-        # Update last-known cache
+        # Update last-known cache and record history
         last_known: dict[str, QuotaStatus] = app.bot_data.setdefault("last_known", {})
         for code, status in statuses.items():
+            prev = last_known.get(code)
+            if prev is not None:
+                if status.available and not prev.available:
+                    # Became available: record OPEN
+                    logger.info("Recording history: wilaya=%s OPENED", code)
+                    await db_mod.add_quota_history_entry(db_path, code, "OPEN")
+                elif not status.available and prev.available:
+                    # Became unavailable: record CLOSE
+                    logger.info("Recording history: wilaya=%s CLOSED", code)
+                    await db_mod.add_quota_history_entry(db_path, code, "CLOSE")
+            
             last_known[code] = status
 
         # If startup couldn't fetch wilayas, populate the inline keyboard source

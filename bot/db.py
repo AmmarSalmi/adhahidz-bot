@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS communes (
   is_active INTEGER NOT NULL DEFAULT 1,
   FOREIGN KEY (wilaya_code) REFERENCES wilayas(code)
 );
+CREATE TABLE IF NOT EXISTS quota_history (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  wilaya_code TEXT    NOT NULL,
+  event_type  TEXT    NOT NULL, -- 'OPEN' or 'CLOSE'
+  timestamp   TEXT    NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (wilaya_code) REFERENCES wilayas(code)
+);
 """
 
 
@@ -280,4 +287,18 @@ async def save_communes(db_path: str, wilaya_code: str, communes: list[dict]) ->
                 [(str(c["code"]), str(wilaya_code), str(c["name"]), 1 if c.get("isActive") else 0) for c in communes],
             )
             await db.commit()
+    await _with_retries(_op)
+
+
+async def add_quota_history_entry(db_path: str, wilaya_code: str, event_type: str) -> None:
+    """Record an OPEN/CLOSE event for a wilaya."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute(
+                "INSERT INTO quota_history (wilaya_code, event_type) VALUES (?, ?)",
+                (wilaya_code, event_type),
+            )
+            await db.commit()
+
     await _with_retries(_op)

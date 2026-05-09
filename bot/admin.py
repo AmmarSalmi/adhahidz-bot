@@ -185,6 +185,15 @@ async def on_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     lines.append(f"🕐 Profiles created today: *{stats['profiles_today']}*")
     lines.append(f"📅 Profiles created this week: *{stats['profiles_week']}*")
 
+    if stats.get("recent_history"):
+        lines.append("")
+        lines.append("*Recent Quota Events (last 10):*")
+        for code, event, ts in stats["recent_history"]:
+            # Format: '2026-05-10 00:17:10' -> '00:17:10'
+            short_ts = ts.split(" ")[1] if " " in ts else ts
+            emoji = "✅" if event == "OPEN" else "❌"
+            lines.append(f"  • `{short_ts}` {emoji} `{code}`")
+
     # Back button
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]]
@@ -805,6 +814,12 @@ async def _gather_stats(db_path: str) -> dict:
         ) as cur:
             profiles_week = (await cur.fetchone())[0]
 
+        # Recent quota events
+        async with db.execute(
+            "SELECT wilaya_code, event_type, timestamp FROM quota_history ORDER BY id DESC LIMIT 10"
+        ) as cur:
+            recent_history = [(str(r[0]), str(r[1]), str(r[2])) for r in await cur.fetchall()]
+
     return {
         "total_subscriptions": total_subs,
         "subs_today": subs_today,
@@ -813,4 +828,5 @@ async def _gather_stats(db_path: str) -> dict:
         "profiles_by_status": profiles_by_status,
         "profiles_today": profiles_today,
         "profiles_week": profiles_week,
+        "recent_history": recent_history,
     }
