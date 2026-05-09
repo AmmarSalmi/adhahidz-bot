@@ -1,9 +1,10 @@
 import os
 
-def get_proxy_url() -> str | None:
+def get_proxy_url(session_id: str | None = None) -> str | None:
     """Constructs the proxy URL from environment variables.
     
     Expected format: http://user:pass@host:port
+    Supports Databay sessionId parameter for sticky sessions.
     """
     user = os.getenv("PROXY_USER")
     password = os.getenv("PROXY_PASS")
@@ -12,5 +13,9 @@ def get_proxy_url() -> str | None:
 
     if not user or not password:
         return None
+
+    # Append Databay sticky session parameter if requested
+    if session_id:
+        user = f"{user}-sessionId-{session_id}"
 
     return f"http://{user}:{password}@{host}:{port}"
