@@ -173,6 +173,11 @@ async def _try_submit_profile(
             pass
 
         if not is_captcha_error and "captcha" not in resp.text.lower():
+            # Check if account is already active
+            if any(term in error_msg.lower() for term in ["déjà actif", "already active", "déjà enregistré", "already registered"]):
+                logger.info("Profile %s is already registered on server: %s", profile.id, error_msg)
+                return profile, "already_registered", error_msg
+
             logger.warning(
                 "Profile %s rejected by server (not CAPTCHA): %s",
                 profile.id, error_msg,
@@ -580,6 +585,34 @@ async def _process_user_profiles(
                 ),
                 parse_mode="Markdown",
             )
+        elif outcome == "already_registered":
+            # Switch to login + order flow immediately
+            logger.info("Profile %s already registered. Switching to login flow.", profile.id)
+            await profile_db.set_profile_status(db_path, profile.id, "registered")
+            
+            l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
+            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+            if l_outcome == "ordered":
+                await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"🐑 *Order placed!*\n\n"
+                        f"Profile: *{l_profile.name or masked}*\n"
+                        "Account was already active; order was submitted successfully!"
+                    ),
+                    parse_mode="Markdown",
+                )
+            else:
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"🟡 *Account already active for {profile.name or masked}*\n\n"
+                        f"I tried to log in and place an order, but failed: {l_detail}\n"
+                        "Status updated to *registered*. Will retry order next time."
+                    ),
+                    parse_mode="Markdown",
+                )
         elif outcome == "ip_blocked":
             ip_blocked = True
             remaining.append(profile)
@@ -620,6 +653,34 @@ async def _process_user_profiles(
                 ),
                 parse_mode="Markdown",
             )
+        elif outcome == "already_registered":
+            # Switch to login + order flow immediately
+            logger.info("Profile %s already registered (Phase 2). Switching to login flow.", profile.id)
+            await profile_db.set_profile_status(db_path, profile.id, "registered")
+            
+            l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
+            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+            if l_outcome == "ordered":
+                await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"🐑 *Order placed!*\n\n"
+                        f"Profile: *{l_profile.name or masked}*\n"
+                        "Account was already active; order was submitted successfully!"
+                    ),
+                    parse_mode="Markdown",
+                )
+            else:
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"🟡 *Account already active for {profile.name or masked}*\n\n"
+                        f"I tried to log in and place an order, but failed: {l_detail}\n"
+                        "Status updated to *registered*. Will retry order next time."
+                    ),
+                    parse_mode="Markdown",
+                )
         elif outcome == "captcha_fail":
             # Queue manual CAPTCHA for user
             await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)

@@ -27,8 +27,8 @@ def get_account_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(lang, "🔙 Back"), callback_data="menu:nav:main")],
     ])
 
-def get_profiles_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+def get_profiles_menu_keyboard(lang: str, is_admin_user: bool = False) -> InlineKeyboardMarkup:
+    buttons = [
         [InlineKeyboardButton(t(lang, "📋 List Profiles"), callback_data="menu:cmd:profiles")],
         [InlineKeyboardButton(t(lang, "➕ Add Auto-Profile"), callback_data="menu:cmd:addprofile"),
          InlineKeyboardButton(t(lang, "📝 Manual Register"), callback_data="menu:cmd:register")],
@@ -36,10 +36,15 @@ def get_profiles_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
          InlineKeyboardButton(t(lang, "🗑️ Delete Profile"), callback_data="menu:cmd:deleteprofile")],
         [InlineKeyboardButton(t(lang, "👁️ View Profile"), callback_data="menu:cmd:viewprofile"),
          InlineKeyboardButton(t(lang, "↕️ Reorder Profiles"), callback_data="menu:cmd:reorder")],
-        [InlineKeyboardButton(t(lang, "✅ Verify OTP"), callback_data="menu:cmd:verifyotp"),
-         InlineKeyboardButton(t(lang, "🔍 Check Profile"), callback_data="menu:cmd:checkprofile")],
-        [InlineKeyboardButton(t(lang, "🔙 Back"), callback_data="menu:nav:main")],
-    ])
+    ]
+    
+    verify_row = [InlineKeyboardButton(t(lang, "✅ Verify OTP"), callback_data="menu:cmd:verifyotp")]
+    if is_admin_user:
+        verify_row.append(InlineKeyboardButton(t(lang, "🔍 Check Profile"), callback_data="menu:cmd:checkprofile"))
+    
+    buttons.append(verify_row)
+    buttons.append([InlineKeyboardButton(t(lang, "🔙 Back"), callback_data="menu:nav:main")])
+    return InlineKeyboardMarkup(buttons)
 
 def get_settings_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -74,7 +79,8 @@ async def on_menu_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     elif data == "menu:nav:account":
         await query.edit_message_text(t(lang, "👤 *Account Menu*\nManage your wilaya subscription:"), reply_markup=get_account_menu_keyboard(lang), parse_mode="Markdown")
     elif data == "menu:nav:profiles":
-        await query.edit_message_text(t(lang, "👥 *Profiles Menu*\nManage your registration profiles:"), reply_markup=get_profiles_menu_keyboard(lang), parse_mode="Markdown")
+        from .admin import is_admin
+        await query.edit_message_text(t(lang, "👥 *Profiles Menu*\nManage your registration profiles:"), reply_markup=get_profiles_menu_keyboard(lang, is_admin(update)), parse_mode="Markdown")
     elif data == "menu:nav:settings":
         await query.edit_message_text(t(lang, "⚙️ *Settings Menu*\nBot settings and info:"), reply_markup=get_settings_menu_keyboard(lang), parse_mode="Markdown")
     elif data == "menu:nav:language":
@@ -137,7 +143,8 @@ async def handle_reply_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if text == t(lang, "👤 Account"):
         await update.message.reply_text(t(lang, "👤 *Account Menu*\nManage your wilaya subscription:"), reply_markup=get_account_menu_keyboard(lang), parse_mode="Markdown")
     elif text == t(lang, "👥 Profiles"):
-        await update.message.reply_text(t(lang, "👥 *Profiles Menu*\nManage your registration profiles:"), reply_markup=get_profiles_menu_keyboard(lang), parse_mode="Markdown")
+        from .admin import is_admin
+        await update.message.reply_text(t(lang, "👥 *Profiles Menu*\nManage your registration profiles:"), reply_markup=get_profiles_menu_keyboard(lang, is_admin(update)), parse_mode="Markdown")
     elif text == t(lang, "⚙️ Settings"):
         await update.message.reply_text(t(lang, "⚙️ *Settings Menu*\nBot settings and info:"), reply_markup=get_settings_menu_keyboard(lang), parse_mode="Markdown")
     elif text == t(lang, "🌐 Language / اللغة"):

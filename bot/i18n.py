@@ -59,6 +59,7 @@ _TRANSLATIONS = {
         "\n/cancel — Cancel an in-progress registration": "\n/cancel — إلغاء التسجيل الحالي",
         "_No wilayas are currently being watched._": "_لا توجد ولايات مراقبة حالياً._",
         "👁 *Watched wilayas:*\n": "👁 *الولايات المراقبة:*\n",
+        "❌ You have reached the maximum limit of 3 profiles. Please delete an existing profile to add a new one.": "❌ لقد وصلت إلى الحد الأقصى وهو 3 ملفات شخصية. يرجى حذف ملف شخصي حالي لإضافة ملف جديد.",
     },
     "fr": {
         "Welcome! I couldn't load the Wilaya list yet (API unavailable). Send /change later to try again.": "Bienvenue ! Je n'ai pas pu charger la liste des Wilayas. Envoyez /change plus tard.",
@@ -113,6 +114,7 @@ _TRANSLATIONS = {
         "\n/cancel — Cancel an in-progress registration": "\n/cancel — Annuler une inscription en cours",
         "_No wilayas are currently being watched._": "_Aucune wilaya n'est actuellement surveillée._",
         "👁 *Watched wilayas:*\n": "👁 *Wilayas surveillées :*\n",
+        "❌ You have reached the maximum limit of 3 profiles. Please delete an existing profile to add a new one.": "❌ Vous avez atteint la limite maximale de 3 profils. Veuillez supprimer un profil existant pour en ajouter un nouveau.",
     }
 }
 

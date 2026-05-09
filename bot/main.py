@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from .admin import admin_command, on_admin_back, on_admin_stats, on_admin_toggle_restrict
+from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict
 
 from .api_client import QuotaApiClient
 from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
@@ -76,6 +76,37 @@ async def _post_init(app: Application) -> None:
     )
     app.bot_data["scheduler"] = scheduler
 
+    if not os.path.exists(".excess_notified"):
+        import asyncio
+        async def notify_excess_profiles(app_ref, path):
+            from . import profile_db
+            try:
+                user_profiles = await profile_db.get_all_profiles_grouped_by_user(path)
+                for user_id, profiles in user_profiles.items():
+                    if len(profiles) > 3:
+                        excess_count = len(profiles) - 3
+                        try:
+                            await app_ref.bot.send_message(
+                                chat_id=user_id,
+                                text=(
+                                    f"⚠️ *Profile Limit Update*\n\n"
+                                    f"To ensure fair access, we are restricting all users to a maximum of 3 profiles. "
+                                    f"You currently have {len(profiles)} profiles.\n\n"
+                                    f"Please delete your excess profiles manually using /profiles.\n"
+                                    f"If you do not remove them, your {excess_count} lowest priority profile(s) (at the bottom of your list) "
+                                    f"will be automatically removed tomorrow at 10:00 AM Algeria Time."
+                                ),
+                                parse_mode="Markdown",
+                            )
+                        except Exception:
+                            logger.exception("Failed to send notice to user %s", user_id)
+                with open(".excess_notified", "w") as f:
+                    f.write("done")
+            except Exception:
+                logger.exception("Failed to notify excess profiles")
+        
+        asyncio.create_task(notify_excess_profiles(app, db_path))
+
     # Register the bot menu button with Telegram
     await app.bot.set_my_commands(
         [BotCommand(cmd, desc) for cmd, desc in BOT_COMMANDS]
@@ -126,6 +157,7 @@ def main() -> None:
     )
 
     # Conversation handlers (must be added first for priority)
+    app.add_handler(build_admin_broadcast_handler())
     app.add_handler(build_registration_handler())
     app.add_handler(build_addprofile_handler())
     app.add_handler(build_verifyotp_handler())

@@ -19,10 +19,23 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
+from deep_translator import GoogleTranslator
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes
+from telegram.ext import (
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from .db import get_user_language
 
 logger = logging.getLogger(__name__)
+
+# Conversation states for broadcasting
+AWAIT_BROADCAST_MESSAGE = 1
+AWAIT_BROADCAST_CONFIRM = 2
 
 # ---------------------------------------------------------------------------
 # Admin identity — loaded once from env at import time
@@ -196,6 +209,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
+            [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
             [InlineKeyboardButton(toggle_label, callback_data="admin:toggle_restrict")],
         ]
     )
@@ -233,6 +247,168 @@ async def on_admin_toggle_restrict(
         f"{status_emoji} Restricted mode: *{status_text}*",
         reply_markup=keyboard,
         parse_mode="Markdown",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Broadcast Feature
+# ---------------------------------------------------------------------------
+
+async def on_admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start the broadcast flow."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Cancel", callback_data="admin:broadcast_cancel")]]
+    )
+    await query.edit_message_text(
+        "📢 *Message All Users*\n\n"
+        "Please send the message you want to broadcast to all registered users.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return AWAIT_BROADCAST_MESSAGE
+
+
+async def on_admin_broadcast_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive the broadcast message and ask for confirmation."""
+    if not is_admin(update):
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_BROADCAST_MESSAGE
+
+    context.user_data["broadcast_text"] = msg.text
+
+    # Count how many users we will send it to
+    db_path: str = context.application.bot_data.get("db_path", "")
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            async with db.execute("SELECT COUNT(*) FROM subscriptions") as cur:
+                count = (await cur.fetchone())[0]
+    except Exception:
+        count = "unknown"
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Send", callback_data="admin:broadcast_confirm_yes"),
+            InlineKeyboardButton("❌ Cancel", callback_data="admin:broadcast_cancel")
+        ]
+    ])
+
+    await msg.reply_text(
+        f"📢 *Preview Broadcast*\n\n"
+        f"_{msg.text}_\n\n"
+        f"Are you sure you want to send this to *{count}* users?",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return AWAIT_BROADCAST_CONFIRM
+
+
+async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Execute or cancel the broadcast."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    if query.data == "admin:broadcast_cancel":
+        await query.edit_message_text("🚫 Broadcast cancelled.")
+        return ConversationHandler.END
+
+    if query.data == "admin:broadcast_confirm_yes":
+        broadcast_text = context.user_data.get("broadcast_text", "")
+        db_path: str = context.application.bot_data.get("db_path", "")
+        
+        await query.edit_message_text("⏳ Broadcasting message (with auto-translation)...")
+        
+        # Pre-translate to support languages
+        try:
+            # We translate to Arabic and French (fallback to original on error)
+            # Run translation in a separate thread so we don't block the async loop
+            import asyncio
+            loop = asyncio.get_running_loop()
+            
+            def translate_all(text):
+                return {
+                    "ar": GoogleTranslator(source='auto', target='ar').translate(text),
+                    "fr": GoogleTranslator(source='auto', target='fr').translate(text),
+                    "en": GoogleTranslator(source='auto', target='en').translate(text),
+                }
+            
+            translated_msgs = await loop.run_in_executor(None, translate_all, broadcast_text)
+        except Exception as e:
+            logger.error("Failed to pre-translate broadcast message: %s", e)
+            # Fallback
+            translated_msgs = {"ar": broadcast_text, "fr": broadcast_text, "en": broadcast_text}
+            
+        success = 0
+        failed = 0
+        try:
+            async with aiosqlite.connect(db_path) as db:
+                await db.execute("PRAGMA busy_timeout=3000;")
+                async with db.execute("SELECT user_id FROM subscriptions") as cur:
+                    rows = await cur.fetchall()
+            
+            for (user_id,) in rows:
+                user_lang = await get_user_language(db_path, user_id)
+                msg_text = translated_msgs.get(user_lang, translated_msgs["ar"])
+                
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"📢 *Announcement*\n\n{msg_text}",
+                        parse_mode="Markdown"
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.warning("Failed to send broadcast to %s: %s", user_id, e)
+                    failed += 1
+        except Exception:
+            logger.exception("Database error during broadcast")
+
+        await query.edit_message_text(
+            f"✅ *Broadcast Complete*\n\n"
+            f"Sent to: {success}\n"
+            f"Failed: {failed}",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    return ConversationHandler.END
+
+
+def build_admin_broadcast_handler() -> ConversationHandler:
+    """Build the conversation handler for admin broadcasting."""
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(on_admin_broadcast_start, pattern=r"^admin:broadcast_start$")],
+        states={
+            AWAIT_BROADCAST_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_broadcast_message_received),
+                CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
+            ],
+            AWAIT_BROADCAST_CONFIRM: [
+                CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_confirm_yes|admin:broadcast_cancel$")
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
+        ],
+        per_message=False,
     )
 
 

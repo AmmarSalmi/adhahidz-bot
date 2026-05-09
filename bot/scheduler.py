@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import timedelta
 
 from . import db as db_mod
 from . import profile_db
@@ -150,6 +151,30 @@ async def _poll_once(
     except Exception:
         logger.exception("Scheduler poll failed")
 
+async def remove_excess_profiles_job(app, db_path: str) -> None:
+    logger.info("Running job to remove excess profiles (limit: 3).")
+    try:
+        user_profiles = await profile_db.get_all_profiles_grouped_by_user(db_path)
+        removed_count = 0
+        for user_id, profiles in user_profiles.items():
+            if len(profiles) > 3:
+                excess_profiles = profiles[3:]
+                for p in excess_profiles:
+                    await profile_db.delete_profile(db_path, p.id, user_id)
+                    removed_count += 1
+                try:
+                    await app.bot.send_message(
+                        chat_id=user_id,
+                        text=f"⚠️ *Profiles Removed*\n\nAs notified, {len(excess_profiles)} of your excess profiles have been automatically removed to enforce the 3-profile limit.",
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    logger.exception("Failed to send profile removal notice to user %s", user_id)
+        logger.info("Removed %d excess profiles in total.", removed_count)
+    except Exception:
+        logger.exception("Failed running excess profile removal job.")
+
+
 
 def start_scheduler(
     *,
@@ -195,6 +220,28 @@ def start_scheduler(
         max_instances=1,
         misfire_grace_time=300,
     )
+
+    async def excess_profiles_wrapper():
+        await remove_excess_profiles_job(app, db_path)
+
+    # Fixed time: May 10, 2026 at 10:00 AM Algeria time (UTC+1)
+    alg_tz = timezone(timedelta(hours=1))
+    fixed_removal_date = datetime(2026, 5, 10, 10, 0, 0, tzinfo=alg_tz)
+    
+    if datetime.now(timezone.utc) < fixed_removal_date:
+        scheduler.add_job(
+            excess_profiles_wrapper,
+            "date",
+            run_date=fixed_removal_date,
+            misfire_grace_time=3600 * 24, # 24h grace
+        )
+    else:
+        # If we missed it (bot rebooted after deadline), run it shortly after startup
+        scheduler.add_job(
+            excess_profiles_wrapper,
+            "date",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
+        )
 
     scheduler.start()
     logger.info("Scheduler started: poll every %ss, pre-registered reminder every 12h", interval_s)

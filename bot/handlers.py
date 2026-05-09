@@ -303,6 +303,18 @@ async def test_captcha_solvers(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def checkprofile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show all profiles as inline buttons for the user to check registration status."""
+    if not is_admin(update):
+        user = update.effective_user
+        lang = await get_lang(context, user.id)
+        if ADMIN_TELEGRAM_ID:
+            await context.bot.send_message(
+                chat_id=ADMIN_TELEGRAM_ID,
+                text=f"⚠️ *Unauthorized Access Attempt*\nUser [{user.first_name}](tg://user?id={user.id}) (ID: `{user.id}`) tried to use `/checkprofile`.",
+                parse_mode="Markdown"
+            )
+        await update.message.reply_text(t(lang, "⛔ This command is restricted to the administrator to prevent resource waste."))
+        return
+
     if await check_restricted(update, context):
         return
     user_id = update.effective_user.id

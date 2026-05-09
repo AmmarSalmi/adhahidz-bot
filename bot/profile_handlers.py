@@ -53,6 +53,19 @@ def _ap_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
 async def addprofile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if await check_restricted(update, context):
         return ConversationHandler.END
+        
+    db_path: str = context.application.bot_data["db_path"]
+    user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
+    
+    profiles = await profile_db.get_profiles(db_path, user_id)
+    if len(profiles) >= 3:
+        await update.effective_message.reply_text(
+            t(lang, "❌ You have reached the maximum limit of 3 profiles. Please delete an existing profile to add a new one."),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
     context.user_data["add_profile"] = {}
     await update.effective_message.reply_text(
         "📋 *Add Registration Profile*\n\n"
@@ -300,17 +313,7 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Clean up temp state
     context.user_data.pop("add_profile", None)
 
-    # Auto check status
-    from .registration import check_profile_status
-    profile = await profile_db.get_profile(db_path, profile_id, user_id)
-    if profile:
-        status, _, _ = await check_profile_status(context, profile)
-        if status in ("pre-registered", "registered", "pending", "ordered"):
-            await profile_db.set_profile_status(db_path, profile_id, status)
-        else:
-            status = "pending"
-    else:
-        status = "pending"
+    status = "pending"
 
     pm_label = _PAYMENT_METHODS.get(state.get('payment_method', 'CASH'), state.get('payment_method', 'CASH'))
     await update.message.reply_text(

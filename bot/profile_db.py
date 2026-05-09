@@ -287,6 +287,23 @@ async def get_all_profiles_by_status(
             return [_row_to_profile(r) for r in rows]
 
 
+async def get_all_profiles_grouped_by_user(db_path: str) -> dict[int, list[Profile]]:
+    """Return all profiles grouped by user_id, each list sorted by priority."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            f"SELECT {_SELECT_COLS} FROM profiles ORDER BY user_id, priority"
+        ) as cur:
+            rows = await cur.fetchall()
+            res: dict[int, list[Profile]] = {}
+            for r in rows:
+                p = _row_to_profile(r)
+                if p.user_id not in res:
+                    res[p.user_id] = []
+                res[p.user_id].append(p)
+            return res
+
+
 async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
     """Return distinct wilaya codes that have at least one pending, registered, or pre-registered profile."""
     async with aiosqlite.connect(db_path) as db:

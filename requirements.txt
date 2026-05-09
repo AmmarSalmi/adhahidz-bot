@@ -5,3 +5,4 @@ aiosqlite==0.20.0
 python-dotenv==1.0.1
 ddddocr==1.6.1
 2captcha-python
+deep-translator==1.11.4

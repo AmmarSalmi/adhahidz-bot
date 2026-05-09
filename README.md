@@ -10,7 +10,8 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open without blocking. Includes support for selecting payment methods (CASH, TPE, EN_LIGNE).
 - **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
-- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode" to limit regular user activity during critical quota periods.
+- **Profile Usage Limits**: Enforces a fair-usage limit of 3 registration profiles per user to ensure system stability and performance.
+- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode" to limit regular user activity during critical quota periods. Commands like `/checkprofile` are restricted to administrators to prevent rate-limiting on the main API.
 
 ### Prerequisites
 - Docker + Docker Compose
@@ -65,10 +66,13 @@ Most interaction is now handled via the built-in menus, but commands are still a
 - `/editprofile`: Edit a registration profile
 - `/deleteprofile`: Delete a registration profile
 - `/reorder`: Change profile priority order
-- `/checkprofile`: Check if a profile NIN is registered on server
 - `/verifyotp`: Verify OTP for a submitted profile
 - `/register`: Manual adhahi.dz registration flow
 - `/testcaptchasolvers`: Test both CAPTCHA solvers side-by-side
+
+**Admin Commands**
+- `/checkprofile`: (Admin Only) Check if a profile NIN is registered on server
+- `/adminammar`: Open the hidden admin dashboard
 
 ### Adapting to a different quota API
 All API shape assumptions are centralized in `bot/api_client.py`:
