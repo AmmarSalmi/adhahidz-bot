@@ -124,7 +124,7 @@ async def _poll_once(
                     )
                 else:
                     try:
-                        actionable_profiles = await profile_db.get_profiles_for_wilaya_by_statuses(
+                        actionable_profiles = await profile_db.get_actionable_profiles_prioritized(
                             db_path, wilaya_code, ["pending", "registered", "pre-registered"]
                         )
                         if actionable_profiles:

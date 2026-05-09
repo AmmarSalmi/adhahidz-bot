@@ -382,35 +382,43 @@ async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
     }
 
     try:
-        # Split by status
-        pending_profiles = [p for p in profiles if p.status == "pending"]
-        registered_profiles = [p for p in profiles if p.status == "registered"]
-        preregistered_profiles = [p for p in profiles if p.status == "pre-registered"]
+        # Group ALL profiles by user_id, preserving seniority order (profiles is already sorted)
+        user_groups: dict[int, list[profile_db.Profile]] = {}
+        ordered_user_ids: list[int] = []
+        for p in profiles:
+            if p.user_id not in user_groups:
+                ordered_user_ids.append(p.user_id)
+                user_groups[p.user_id] = []
+            user_groups[p.user_id].append(p)
 
-        # ── Handle pending profiles (existing registration flow) ──
-        if pending_profiles:
-            user_pending: dict[int, list[profile_db.Profile]] = {}
-            for p in pending_profiles:
-                user_pending.setdefault(p.user_id, []).append(p)
+        async def _process_group(user_id: int, group: list[profile_db.Profile]):
+            # Split this user's profiles by status
+            pending = [p for p in group if p.status == "pending"]
+            registered = [p for p in group if p.status == "registered"]
+            preregistered = [p for p in group if p.status == "pre-registered"]
 
-            for user_id, user_profs in user_pending.items():
-                for p in user_profs:
+            tasks = []
+            
+            # 1. Handle pending (registration flow)
+            if pending:
+                for p in pending:
                     await profile_db.set_profile_status(db_path, p.id, "registering")
-                try:
-                    await _process_user_profiles(app, user_id, user_profs, api_client, use_proxy, base_headers, db_path)
-                except Exception:
-                    logger.exception("Auto-registration failed for user %s", user_id)
-                    for p in user_profs:
-                        await profile_db.set_profile_status(db_path, p.id, "pending")
+                tasks.append(_process_user_profiles(app, user_id, pending, api_client, use_proxy, base_headers, db_path))
+            
+            # 2. Handle registered (login+order flow)
+            if registered:
+                tasks.append(_process_registered_profiles(app, registered, api_client, use_proxy, base_headers, db_path))
+            
+            # 3. Handle pre-registered (nudge flow)
+            if preregistered:
+                tasks.append(_nudge_preregistered_profiles(app, preregistered, api_client, use_proxy, base_headers))
+            
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
-        # ── Handle registered profiles (login + order flow) ──
-        if registered_profiles:
-            await _process_registered_profiles(app, registered_profiles, api_client, use_proxy, base_headers, db_path)
+        # Launch all user groups concurrently. The semaphore in sub-functions will throttle connections.
+        await asyncio.gather(*[_process_group(uid, user_groups[uid]) for uid in ordered_user_ids], return_exceptions=True)
 
-        # ── Handle pre-registered profiles (resend OTP + urgent notify, non-blocking) ──
-        if preregistered_profiles:
-            # For nudges, we don't strictly need stickiness but we'll use a standard proxy session if enabled
-            await _nudge_preregistered_profiles(app, preregistered_profiles, api_client, use_proxy, base_headers)
     except Exception:
         logger.exception("Unexpected error in auto_submit_profiles")
 
@@ -427,32 +435,34 @@ async def _nudge_preregistered_profiles(
     This is fire-and-forget — we resend the OTP and tell the user to verify,
     but we never block waiting for their response.
     """
+    sem = app.bot_data["concurrency_semaphore"]
     for profile in profiles:
         # Each nudge gets its own connection (minimal overhead as it's sequential)
-        proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
-        async with api_client.create_session(proxy_url=proxy_url) as client:
-            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-            user_id = profile.user_id
+        async with sem:
+            proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+            async with api_client.create_session(proxy_url=proxy_url) as client:
+                masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                user_id = profile.user_id
 
-        # Try to resend OTP
-        headers = {**base_headers, "Referer": "https://adhahi.dz/activation", "Origin": "https://adhahi.dz"}
-        otp_sent = False
-        try:
-            resp = await client.post(
-                "/api/v1/citizens/resend-otp",
-                json={"nin": profile.nin},
-                headers=headers,
-            )
-            if 200 <= resp.status_code < 300:
-                otp_sent = True
-                logger.info("OTP resent for pre-registered profile %s", profile.id)
-            else:
-                logger.warning(
-                    "OTP resend failed for profile %s: HTTP %s %s",
-                    profile.id, resp.status_code, resp.text,
-                )
-        except Exception:
-            logger.exception("OTP resend network error for profile %s", profile.id)
+                # Try to resend OTP
+                headers = {**base_headers, "Referer": "https://adhahi.dz/activation", "Origin": "https://adhahi.dz"}
+                otp_sent = False
+                try:
+                    resp = await client.post(
+                        "/api/v1/citizens/resend-otp",
+                        json={"nin": profile.nin},
+                        headers=headers,
+                    )
+                    if 200 <= resp.status_code < 300:
+                        otp_sent = True
+                        logger.info("OTP resent for pre-registered profile %s", profile.id)
+                    else:
+                        logger.warning(
+                            "OTP resend failed for profile %s: HTTP %s %s",
+                            profile.id, resp.status_code, resp.text,
+                        )
+                except Exception:
+                    logger.exception("OTP resend network error for profile %s", profile.id)
 
         # Notify user urgently — don't wait for response
         try:
@@ -497,10 +507,12 @@ async def _process_registered_profiles(
 
     Each profile uses a dedicated sticky proxy session to ensure IP consistency.
     """
+    sem = app.bot_data["concurrency_semaphore"]
     async def _run_sticky_login_and_order(p: profile_db.Profile):
-        proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
-        async with api_client.create_session(proxy_url=proxy_url) as client:
-            return await _try_login_and_order(p, client, base_headers)
+        async with sem:
+            proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
+            async with api_client.create_session(proxy_url=proxy_url) as client:
+                return await _try_login_and_order(p, client, base_headers)
 
     results = await asyncio.gather(
         *[_run_sticky_login_and_order(p) for p in profiles],
@@ -573,10 +585,12 @@ async def _process_user_profiles(
     Each profile uses a dedicated sticky proxy session to ensure IP consistency.
     """
 
+    sem = app.bot_data["concurrency_semaphore"]
     async def _run_sticky_submit(p: profile_db.Profile):
-        proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
-        async with api_client.create_session(proxy_url=proxy_url) as client:
-            return await _try_submit_profile(p, client, base_headers)
+        async with sem:
+            proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
+            async with api_client.create_session(proxy_url=proxy_url) as client:
+                return await _try_submit_profile(p, client, base_headers)
 
     # ── Phase 1: Concurrent auto-CAPTCHA ──
     results = await asyncio.gather(
@@ -659,62 +673,63 @@ async def _process_user_profiles(
     remaining.sort(key=lambda p: p.priority)
 
     for profile in remaining:
-        proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
-        async with api_client.create_session(proxy_url=proxy_url) as client:
-            p_result = await _try_submit_profile(profile, client, base_headers)
-            _, outcome, detail = p_result
+        async with sem:
+            proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+            async with api_client.create_session(proxy_url=proxy_url) as client:
+                p_result = await _try_submit_profile(profile, client, base_headers)
+                _, outcome, detail = p_result
 
-            if outcome == "submitted":
-                await profile_db.set_profile_status(db_path, profile.id, "submitted")
-                masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-                await app.bot.send_message(
-                    chat_id=user_id,
-                    text=(
-                        f"✅ *Registration submitted!*\n\n"
-                        f"Profile: *{profile.name or masked}*\n"
-                        f"Phone: `{profile.phone}`\n\n"
-                        "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
-                    ),
-                    parse_mode="Markdown",
-                )
-            elif outcome == "already_registered":
-                # Switch to login + order flow immediately
-                logger.info("Profile %s already registered (Phase 2). Switching to login flow.", profile.id)
-                await profile_db.set_profile_status(db_path, profile.id, "registered")
-                
-                l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
-                masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-                if l_outcome == "ordered":
-                    await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                if outcome == "submitted":
+                    await profile_db.set_profile_status(db_path, profile.id, "submitted")
+                    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
                     await app.bot.send_message(
                         chat_id=user_id,
                         text=(
-                            f"🐑 *Order placed!*\n\n"
-                            f"Profile: *{l_profile.name or masked}*\n"
-                            "Account was already active; order was submitted successfully!"
+                            f"✅ *Registration submitted!*\n\n"
+                            f"Profile: *{profile.name or masked}*\n"
+                            f"Phone: `{profile.phone}`\n\n"
+                            "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
                         ),
                         parse_mode="Markdown",
                     )
+                elif outcome == "already_registered":
+                    # Switch to login + order flow immediately
+                    logger.info("Profile %s already registered (Phase 2). Switching to login flow.", profile.id)
+                    await profile_db.set_profile_status(db_path, profile.id, "registered")
+                    
+                    l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
+                    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                    if l_outcome == "ordered":
+                        await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                        await app.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"🐑 *Order placed!*\n\n"
+                                f"Profile: *{l_profile.name or masked}*\n"
+                                "Account was already active; order was submitted successfully!"
+                            ),
+                            parse_mode="Markdown",
+                        )
+                    else:
+                        await app.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"🟡 *Account already active for {profile.name or masked}*\n\n"
+                                f"I tried to log in and place an order, but failed: {l_detail}\n"
+                                "Status updated to *registered*. Will retry order next time."
+                            ),
+                            parse_mode="Markdown",
+                        )
+                elif outcome == "captcha_fail":
+                    # Queue manual CAPTCHA for user
+                    await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)
                 else:
+                    await profile_db.set_profile_status(db_path, profile.id, "failed")
                     await app.bot.send_message(
                         chat_id=user_id,
-                        text=(
-                            f"🟡 *Account already active for {profile.name or masked}*\n\n"
-                            f"I tried to log in and place an order, but failed: {l_detail}\n"
-                            "Status updated to *registered*. Will retry order next time."
-                        ),
+                        text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
                         parse_mode="Markdown",
                     )
-            elif outcome == "captcha_fail":
-                # Queue manual CAPTCHA for user
-                await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)
-            else:
-                await profile_db.set_profile_status(db_path, profile.id, "failed")
-                await app.bot.send_message(
-                    chat_id=user_id,
-                    text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
-                    parse_mode="Markdown",
-                )
 
 
 async def _send_manual_captcha(

@@ -355,3 +355,38 @@ async def get_profiles_by_status(
         ) as cur:
             rows = await cur.fetchall()
             return [_row_to_profile(r) for r in rows]
+
+
+async def get_actionable_profiles_prioritized(
+    db_path: str, wilaya_code: str, statuses: list[str]
+) -> list[Profile]:
+    """
+    Find actionable profiles for a wilaya, ordered by user seniority then priority.
+    User seniority is determined by the creation date of their oldest profile.
+    """
+    if not statuses:
+        return []
+    placeholders = ",".join("?" for _ in statuses)
+    
+    # We use a CTE to find the 'seniority' of each user (their first profile date)
+    # then join that back to the profiles to sort them.
+    query = f"""
+    WITH UserSeniority AS (
+        SELECT user_id, MIN(created_at) as first_profile_at
+        FROM profiles
+        GROUP BY user_id
+    )
+    SELECT p.id, p.user_id, p.priority, p.name, p.nin, p.cnibe, p.phone, p.password,
+           p.wilaya_id, p.wilaya_name, p.commune_code, p.commune_name, p.email, 
+           p.payment_method, p.status, p.created_at
+    FROM profiles p
+    JOIN UserSeniority us ON p.user_id = us.user_id
+    WHERE CAST(p.wilaya_id AS TEXT) = ? AND p.status IN ({placeholders})
+    ORDER BY us.first_profile_at ASC, p.priority ASC
+    """
+    
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(query, (str(wilaya_code), *statuses)) as cur:
+            rows = await cur.fetchall()
+            return [_row_to_profile(r) for r in rows]

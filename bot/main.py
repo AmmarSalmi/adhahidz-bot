@@ -53,12 +53,18 @@ async def _post_init(app: Application) -> None:
     confirm_delay_s = float(os.getenv("CONFIRM_DELAY_SECONDS", "1"))
     db_path = os.getenv("DATABASE_PATH", "/data/subscriptions.db")
     timeout_s = float(os.getenv("HTTP_TIMEOUT_SECONDS", "10"))
+    max_concurrent = int(os.getenv("MAX_CONCURRENT_SESSIONS", "50"))
 
     await init_db(db_path)
 
     api = QuotaApiClient(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
     app.bot_data["db_path"] = db_path
     app.bot_data["api_client"] = api
+    app.bot_data["max_concurrent_sessions"] = max_concurrent
+    
+    # Global semaphore for auto-registration connections
+    import asyncio
+    app.bot_data["concurrency_semaphore"] = asyncio.Semaphore(max_concurrent)
 
     try:
         app.bot_data["wilayas"] = await _load_wilayas(api)

@@ -7,11 +7,11 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Interactive UI**: Navigate easily using persistent bottom menus and hierarchical inline keyboards instead of memorizing commands.
 - **Multi-language Support (i18n)**: Fully localized interface in Arabic 🇩🇿, French 🇫🇷, and English 🇬🇧.
 - **Notifications**: Alerts subscribed users when quota becomes available in their chosen Wilaya.
-- **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open without blocking. Includes support for selecting payment methods (CASH, TPE, EN_LIGNE).
+- **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open. Now features **Seniority-Based Priority** (ordering users by their join date) and **Global Concurrency Throttling** to ensure system stability and avoid server-side blocking.
 - **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
 - **Profile Usage Limits**: Enforces a fair-usage limit of 3 registration profiles per user to ensure system stability and performance.
-- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode" to limit regular user activity during critical quota periods. Commands like `/checkprofile` are restricted to administrators to prevent rate-limiting on the main API.
+- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, and proxy controls. Commands like `/checkprofile` are restricted to administrators.
 
 ### Prerequisites
 - Docker + Docker Compose
@@ -36,6 +36,7 @@ Optional tuning:
 - `CONFIRM_FETCHES`: when `available=true` is detected, re-fetch this many extra times before notifying (default `2`)
 - `CONFIRM_DELAY_SECONDS`: delay between confirmation re-fetches in seconds (default `1`)
 - `TWO_CAPTCHA_API_KEY`: API key for 2Captcha service (optional, falls back to local `ddddocr` if not provided)
+- `MAX_CONCURRENT_SESSIONS`: global limit of simultaneous registration/login connections (default `50`)
 
 ### Run
 

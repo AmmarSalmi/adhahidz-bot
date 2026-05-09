@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 AWAIT_BROADCAST_MESSAGE = 1
 AWAIT_BROADCAST_CONFIRM = 2
 AWAIT_PROXY_TEST_CONFIG = 3
+AWAIT_CONCURRENCY_LIMIT = 4
 
 # ---------------------------------------------------------------------------
 # Admin identity — loaded once from env at import time
@@ -235,6 +236,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
             [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
             [InlineKeyboardButton(toggle_proxy, callback_data="admin:toggle_proxy")],
+            [InlineKeyboardButton("⚙️ Set Concurrency Limit", callback_data="admin:set_concurrency")],
             [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
         ]
     )
@@ -305,6 +307,67 @@ async def on_admin_toggle_proxy(
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
+
+
+async def on_admin_set_concurrency(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Start the concurrency limit setting flow."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    current = context.application.bot_data.get("max_concurrent_sessions", 50)
+    
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Cancel", callback_data="admin:broadcast_cancel")]]
+    )
+    await query.edit_message_text(
+        f"⚙️ *Set Concurrency Limit*\n\n"
+        f"Current limit: `{current}` connections.\n\n"
+        "Please enter a new integer between *1 and 1000*:",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return AWAIT_CONCURRENCY_LIMIT
+
+
+async def on_admin_concurrency_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive the new concurrency limit and update the semaphore."""
+    if not is_admin(update):
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_CONCURRENCY_LIMIT
+
+    try:
+        val = int(msg.text.strip())
+        if not (1 <= val <= 1000):
+            raise ValueError("Out of range")
+    except ValueError:
+        await msg.reply_text("❌ *Invalid Input*\n\nPlease enter an integer between *1 and 1000*.", parse_mode="Markdown")
+        return AWAIT_CONCURRENCY_LIMIT
+
+    # Update both the number and the semaphore instance
+    context.application.bot_data["max_concurrent_sessions"] = val
+    import asyncio
+    context.application.bot_data["concurrency_semaphore"] = asyncio.Semaphore(val)
+
+    logger.info("Admin updated concurrency limit to %d", val)
+
+    await msg.reply_text(
+        f"✅ *Concurrency Limit Updated*\n\n"
+        f"New limit: `{val}` connections.\n"
+        "This will take effect for the next registration cycle.",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
 
 
 async def on_admin_test_proxy(
@@ -616,7 +679,8 @@ def build_admin_broadcast_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CallbackQueryHandler(on_admin_broadcast_start, pattern=r"^admin:broadcast_start$"),
-            CallbackQueryHandler(on_admin_test_proxy, pattern=r"^admin:test_proxy$")
+            CallbackQueryHandler(on_admin_test_proxy, pattern=r"^admin:test_proxy$"),
+            CallbackQueryHandler(on_admin_set_concurrency, pattern=r"^admin:set_concurrency$")
         ],
         states={
             AWAIT_BROADCAST_MESSAGE: [
@@ -628,6 +692,10 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             ],
             AWAIT_PROXY_TEST_CONFIG: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_proxy_test_config_received),
+                CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
+            ],
+            AWAIT_CONCURRENCY_LIMIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_concurrency_received),
                 CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
             ],
         },
