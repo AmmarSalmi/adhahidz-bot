@@ -32,10 +32,13 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
   - **Blocker Purge**: A manual cleanup tool that identifies and removes all data for users who have blocked the bot.
   - **Invalid NIN Notifier**: A batch maintenance tool that scans the Error Inbox for past 'MICLAT NOT FOUND' rejections and notifies affected users to correct their data.
 - **Strict Compliance Gate**: Implements a unified validation engine across all flows (Add, Edit, Audit). Any profile failing server standards (NIN, CNIBE, Phone, or Password complexity) is automatically marked as `is_valid=0` and strictly excluded from auto-registration batches until corrected by the user.
-- **Strict Server-Sync Validation**: Implements exact `adhahi.dz` requirements to prevent avoidable registration failures:
-  - **Password**: 8-16 characters, mandatory complexity (Upper/Lower/Digit/Symbol), and **explicitly forbids dots (`.`)**.
   - **Identifiers**: Exactly 18-digit NIN and 9-digit CNIBE.
   - **Contact**: Exactly 10-digit Phone starting with `0`.
+- **Scheduler Congestion Resilience**: Optimized the core polling loop to prevent "skipped execution" during high-traffic periods:
+  - **Non-Blocking Notifications**: Telegram broadcasts are now backgrounded (`asyncio.create_task`), ensuring the quota monitor never stalls while waiting for the Telegram API.
+  - **Strict Network Timeouts**: Enforced mandatory 10s total timeouts on all `httpx` requests to prevent hung connections from blocking the scheduler.
+  - **Execution Analytics**: Added high-resolution performance tracking for every poll cycle to monitor system health and response times.
+  - **Job Coalescing**: Configured APScheduler to handle missed or overlapping intervals gracefully, ensuring the most recent quota check is always prioritized.
 
 ### Prerequisites
 - Docker + Docker Compose

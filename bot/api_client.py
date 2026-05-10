@@ -171,7 +171,13 @@ class QuotaApiClient:
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             headers=headers,
-            timeout=httpx.Timeout(self._timeout),
+            timeout=httpx.Timeout(
+                timeout=self._timeout,
+                connect=5.0,
+                read=self._timeout,
+                write=5.0,
+                pool=5.0
+            ),
             follow_redirects=True,
         )
 
@@ -189,7 +195,13 @@ class QuotaApiClient:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
                 "Referer": "https://adhahi.dz/register",
             },
-            timeout=httpx.Timeout(self._timeout),
+            timeout=httpx.Timeout(
+                timeout=self._timeout,
+                connect=5.0,
+                read=self._timeout,
+                write=5.0,
+                pool=5.0
+            ),
             follow_redirects=True,
             proxy=proxy_url,
         )

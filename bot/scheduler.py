@@ -94,7 +94,13 @@ async def _poll_once(
                 to_notify = await db_mod.get_subscribers_to_notify(db_path, wilaya_code)
                 if to_notify:
                     remaining_txt = "unknown" if status.remaining is None else str(status.remaining)
-                    await notify_users(app.bot, to_notify, "✅ Quota available in {wilaya_name}! Remaining: {remaining} units.", db_path=db_path, format_kwargs={"wilaya_name": status.wilaya_name, "remaining": remaining_txt})
+                    # Background the notification task to avoid blocking the polling loop
+                    asyncio.create_task(notify_users(
+                        app.bot, to_notify, 
+                        "✅ Quota available in {wilaya_name}! Remaining: {remaining} units.", 
+                        db_path=db_path, 
+                        format_kwargs={"wilaya_name": status.wilaya_name, "remaining": remaining_txt}
+                    ))
                     await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
                 # Auto-registration: trigger every poll if actionable profiles exist (Aggressive Mode)
@@ -116,7 +122,13 @@ async def _poll_once(
                 previously_notified = await db_mod.get_notified_subscribers(db_path, wilaya_code)
                 if previously_notified:
                     wilaya_name = status.wilaya_name if status else wilaya_code
-                    await notify_users(app.bot, previously_notified, "❌ Quota in {wilaya_name} is no longer available.", db_path=db_path, format_kwargs={"wilaya_name": wilaya_name})
+                    # Background the notification task
+                    asyncio.create_task(notify_users(
+                        app.bot, previously_notified, 
+                        "❌ Quota in {wilaya_name} is no longer available.", 
+                        db_path=db_path, 
+                        format_kwargs={"wilaya_name": wilaya_name}
+                    ))
                 await db_mod.reset_notified_for_wilaya(db_path, wilaya_code)
     except Exception as e:
         import httpx
@@ -227,11 +239,17 @@ def start_scheduler(
 
     async def quota_poll_wrapper():
         """Main loop for wilaya quota monitoring."""
-        await _poll_once(
-            app=app,
-            db_path=db_path,
-            api_client=api_client,
-        )
+        import time
+        start_ts = time.perf_counter()
+        try:
+            await _poll_once(
+                app=app,
+                db_path=db_path,
+                api_client=api_client,
+            )
+        finally:
+            elapsed = time.perf_counter() - start_ts
+            logger.info("--- Quota poll cycle completed in %.3fs ---", elapsed)
 
     # 1. Quota Polling Job
     scheduler.add_job(
@@ -239,6 +257,7 @@ def start_scheduler(
         "interval",
         seconds=interval_s,
         max_instances=1,
+        coalesce=True,
         misfire_grace_time=60,
         id="quota_poll",
     )
