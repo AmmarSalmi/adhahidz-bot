@@ -31,9 +31,7 @@ from telegram.ext import (
 )
 from telegram.error import Forbidden
 
-from .profile_handlers import _validate_email
 from . import profile_db, db as db_mod
-from .registration import _validate_password
 
 logger = logging.getLogger(__name__)
 
@@ -1118,6 +1116,8 @@ async def on_admin_inbox_resolve(update: Update, context: ContextTypes.DEFAULT_T
 
 async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Scan all profiles for invalid data, fix emails, and notify users."""
+    from .profile_handlers import _validate_email
+    from .registration import _validate_password
     query = update.callback_query
     if not query:
         return
