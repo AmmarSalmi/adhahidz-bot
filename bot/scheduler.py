@@ -26,16 +26,11 @@ async def _poll_once(
     api_client: QuotaApiClient,
 ) -> None:
     logger.info("--- Starting scheduled quota poll ---")
-    from .proxy import get_proxy_url
     use_proxy = app.bot_data.get("proxy_wilaya", False)
-    proxy_url = get_proxy_url() if use_proxy else None
     
-    if use_proxy:
-        logger.debug("Using proxy for this poll: %s", proxy_url)
-
     try:
-        logger.debug("Fetching wilaya quotas from API...")
-        statuses = await api_client.fetch_wilaya_quotas(proxy_url=proxy_url)
+        logger.debug("Fetching wilaya quotas from API (proxy=%s)...", use_proxy)
+        statuses = await api_client.fetch_wilaya_quotas(use_proxy=use_proxy)
         logger.debug("API fetch complete. Found %d wilayas.", len(statuses))
         now = datetime.now(timezone.utc).isoformat()
 
@@ -317,26 +312,34 @@ def start_scheduler(
     # Bind scheduler to the currently running application event loop.
     scheduler = AsyncIOScheduler(event_loop=asyncio.get_running_loop())
 
+    # Lock to prevent concurrent quota poll cycles if one takes longer than the interval
+    quota_poll_lock = asyncio.Lock()
+
     async def quota_poll_wrapper():
         """Main loop for wilaya quota monitoring."""
-        import time
-        start_ts = time.perf_counter()
-        try:
-            await _poll_once(
-                app=app,
-                db_path=db_path,
-                api_client=api_client,
-            )
-        finally:
-            elapsed = time.perf_counter() - start_ts
-            logger.info("--- Quota poll cycle completed in %.3fs ---", elapsed)
+        if quota_poll_lock.locked():
+            logger.debug("Skipping quota poll: a previous cycle is still running.")
+            return
+
+        async with quota_poll_lock:
+            import time
+            start_ts = time.perf_counter()
+            try:
+                await _poll_once(
+                    app=app,
+                    db_path=db_path,
+                    api_client=api_client,
+                )
+            finally:
+                elapsed = time.perf_counter() - start_ts
+                logger.info("--- Quota poll cycle completed in %.3fs ---", elapsed)
 
     # 1. Quota Polling Job
     scheduler.add_job(
         quota_poll_wrapper,
         "interval",
         seconds=interval_s,
-        max_instances=1,
+        max_instances=5,  # Increased to allow the wrapper to handle skips silently via the lock
         coalesce=True,
         misfire_grace_time=60,
         id="quota_poll",

@@ -68,7 +68,7 @@ _CAPTCHA_TTL_S = 300
 
 # Standard headers used for registration endpoints
 _REG_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
     "Accept": "application/json",
     "Referer": "https://adhahi.dz/register",
 }

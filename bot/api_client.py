@@ -163,7 +163,7 @@ class QuotaApiClient:
         # Some public endpoints behave differently without a browser-like UA/Referer.
         headers: dict[str, str] = {
             "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/149.0",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0",
             "Referer": "https://adhahi.dz/register",
         }
         if self._api_key:
@@ -184,15 +184,13 @@ class QuotaApiClient:
         )
 
     def create_session(self, proxy_url: str | None = None, timeout_s: float | None = None) -> httpx.AsyncClient:
-        """Create an isolated HTTP client for user-specific operations.
-        ...
-        """
+        """Create an isolated HTTP client for user-specific operations."""
         timeout = timeout_s if timeout_s is not None else self._timeout
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
                 "Referer": "https://adhahi.dz/register",
             },
             timeout=httpx.Timeout(
@@ -209,92 +207,77 @@ class QuotaApiClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def fetch_wilaya_quotas(self, proxy_url: str | None = None) -> dict[str, QuotaStatus]:
+    async def fetch_wilaya_quotas(self, use_proxy: bool = False, proxy_url: str | None = None) -> dict[str, QuotaStatus]:
+        """Fetch quotas with automatic retry and proxy rotation if use_proxy is True."""
         import time
-        # Adhahi endpoint from provided curl
+        import random
+        import string
+        from .proxy import get_proxy_url
+        
         # Add cache-busting parameter to bypass CDN/proxy caches
         path = f"/api/v1/public/wilaya-quotas?_t={int(time.time() * 1000)}"
         
-        mode = "via proxy" if proxy_url else "directly"
-        logger.info("Fetching quotas from adhahi.dz %s...", mode)
-        
-        if proxy_url:
-            async with self.create_session(proxy_url=proxy_url) as client:
-                return await self._fetch_with_client(client, path)
-        else:
-            return await self._fetch_with_client(self._client, path)
-
-    async def _fetch_with_client(self, client: httpx.AsyncClient, path: str) -> dict[str, QuotaStatus]:
         delay_s = 0.5
         last_exc: Exception | None = None
+        
         for attempt in range(3):
+            # If use_proxy is True, generate a fresh session ID for each attempt to rotate the proxy IP.
+            # This is effective against "SSL record layer failure" caused by bad proxy nodes.
+            current_proxy = proxy_url
+            if use_proxy:
+                session_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+                current_proxy = get_proxy_url(session_id=session_id)
+            elif current_proxy is None and self._default_proxy:
+                 current_proxy = self._default_proxy
+
+            mode = "via proxy" if current_proxy else "directly"
+            if attempt > 0:
+                logger.info("Retrying Quota API request (%d/3) %s...", attempt + 1, mode)
+            else:
+                logger.info("Fetching quotas from adhahi.dz %s...", mode)
+            
             try:
-                resp = await client.get(path)
-                if resp.status_code >= 500:
-                    raise httpx.HTTPStatusError(
-                        f"Server error '{resp.status_code}' for url '{resp.request.url}'",
-                        request=resp.request,
-                        response=resp,
-                    )
-                resp.raise_for_status()
-                logger.info("Quota API request successful (HTTP %d)", resp.status_code)
-                payload = resp.json()
-                statuses = parse_wilaya_quotas(payload)
-                return {s.wilaya_code: s for s in statuses}
+                # We always create a fresh session for quotas to ensure no connection reuse if it failed
+                async with self.create_session(proxy_url=current_proxy) as client:
+                    return await self._fetch_once(client, path)
             except httpx.HTTPStatusError as e:
                 last_exc = e
-                status_code = e.response.status_code
-                if status_code == 429:
-                    # Rate limit hit: raise immediately so the scheduler can react
-                    raise
+                if e.response.status_code == 429:
+                    raise  # Rate limit hit: raise immediately
                 
-                # Try to extract error message from response body
-                detail = ""
-                try:
-                    resp_data = e.response.json()
-                    detail = f" - {resp_data.get('message') or resp_data.get('error') or ''}"
-                except Exception:
-                    pass
-
-                if attempt == 2:
-                    break
-                
-                logger.warning(
-                    "Quota API request failed (HTTP %s%s, attempt %s/3); retrying in %.1fs",
-                    status_code, detail, attempt + 1, delay_s
-                )
-                await asyncio.sleep(delay_s)
-                delay_s = min(delay_s * 2, 5.0)
-            except (httpx.ConnectError, httpx.ProxyError) as e:
+                if attempt == 2: break
+                logger.warning("Quota API request failed (HTTP %s, attempt %d/3); retrying in %.1fs", 
+                               e.response.status_code, attempt + 1, delay_s)
+            except (httpx.ConnectError, httpx.ProxyError, httpx.TimeoutException) as e:
                 last_exc = e
-                if attempt == 2:
-                    break
-                logger.warning(
-                    "Network/Proxy connection failed (%s: %s, attempt %s/3); retrying in %.1fs",
-                    type(e).__name__, str(e), attempt + 1, delay_s
-                )
-                await asyncio.sleep(delay_s)
-                delay_s = min(delay_s * 2, 5.0)
-            except httpx.TimeoutException as e:
-                last_exc = e
-                if attempt == 2:
-                    break
-                logger.warning(
-                    "Request timed out (%s, attempt %s/3); retrying in %.1fs",
-                    type(e).__name__, attempt + 1, delay_s
-                )
-                await asyncio.sleep(delay_s)
-                delay_s = min(delay_s * 2, 5.0)
+                if attempt == 2: break
+                logger.warning("Network error (%s: %s, attempt %d/3); retrying in %.1fs", 
+                               type(e).__name__, str(e), attempt + 1, delay_s)
             except Exception as e:
                 last_exc = e
-                if attempt == 2:
-                    break
-                logger.warning(
-                    "Unexpected API error (%s: %s, attempt %s/3); retrying in %.1fs",
-                    type(e).__name__, str(e), attempt + 1, delay_s
-                )
-                await asyncio.sleep(delay_s)
-                delay_s = min(delay_s * 2, 5.0)
+                if attempt == 2: break
+                logger.warning("Unexpected error (%s: %s, attempt %d/3); retrying in %.1fs", 
+                               type(e).__name__, str(e), attempt + 1, delay_s)
 
-        logger.error("Quota API request failed after 3 attempts. Final error: %s: %s", type(last_exc).__name__, last_exc)
+            await asyncio.sleep(delay_s)
+            delay_s = min(delay_s * 2, 5.0)
+
+        logger.error("Quota API request failed after 3 attempts. Final error: %s: %s", 
+                     type(last_exc).__name__, last_exc)
         return {}
+
+    async def _fetch_once(self, client: httpx.AsyncClient, path: str) -> dict[str, QuotaStatus]:
+        """Performs a single GET request and parses the result."""
+        resp = await client.get(path)
+        if resp.status_code >= 500:
+            raise httpx.HTTPStatusError(
+                f"Server error '{resp.status_code}' for url '{resp.request.url}'",
+                request=resp.request,
+                response=resp,
+            )
+        resp.raise_for_status()
+        logger.info("Quota API request successful (HTTP %d)", resp.status_code)
+        payload = resp.json()
+        statuses = parse_wilaya_quotas(payload)
+        return {s.wilaya_code: s for s in statuses}
+

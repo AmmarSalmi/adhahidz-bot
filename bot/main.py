@@ -71,14 +71,14 @@ def _configure_logging() -> None:
     logging.getLogger().addHandler(_inbox_handler)
 
 
-async def _load_wilayas(api: QuotaApiClient, db_path: str | None = None, proxy_url: str | None = None) -> list[tuple[str, str]]:
+async def _load_wilayas(api: QuotaApiClient, db_path: str | None = None, use_proxy: bool = False) -> list[tuple[str, str]]:
     from . import db as db_mod
     if db_path:
         cached = await db_mod.get_cached_wilayas(db_path)
         if cached:
             return cached
 
-    statuses = await api.fetch_wilaya_quotas(proxy_url=proxy_url)
+    statuses = await api.fetch_wilaya_quotas(use_proxy=use_proxy)
     items = [(s.wilaya_code, s.wilaya_name) for s in statuses.values()]
     items.sort(key=lambda t: (t[0], t[1]))
     
@@ -138,10 +138,10 @@ async def _post_init(app: Application) -> None:
     app.bot_data["proxy_autoreg"] = os.getenv("PROXY_AUTOREG", "false").lower() == "true"
     app.bot_data["proxy_checkprof"] = os.getenv("PROXY_CHECKPROF", "false").lower() == "true"
 
-    load_proxy = get_proxy_url() if app.bot_data["proxy_wilaya"] else None
+    use_proxy = app.bot_data["proxy_wilaya"]
 
     try:
-        app.bot_data["wilayas"] = await _load_wilayas(api, db_path, proxy_url=load_proxy)
+        app.bot_data["wilayas"] = await _load_wilayas(api, db_path, use_proxy=use_proxy)
     except Exception:
         logger.exception("Failed to load wilaya list from API at startup")
         app.bot_data["wilayas"] = []

@@ -409,7 +409,7 @@ async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
         logger.warning("Proxy is enabled in Admin Panel, but credentials (PROXY_USER/PROXY_PASS) are missing from .env!")
 
     base_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
         "Accept": "application/json",
         "Referer": "https://adhahi.dz/register",
         "Content-Type": "application/json",
