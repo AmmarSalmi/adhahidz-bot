@@ -58,12 +58,18 @@ async def _poll_once(
     confirm_fetches: int,
     confirm_delay_s: float,
 ) -> None:
+    logger.info("--- Starting scheduled quota poll ---")
     from .proxy import get_proxy_url
     use_proxy = app.bot_data.get("proxy_wilaya", False)
     proxy_url = get_proxy_url() if use_proxy else None
+    
+    if use_proxy:
+        logger.debug("Using proxy for this poll: %s", proxy_url)
 
     try:
+        logger.debug("Fetching wilaya quotas from API...")
         statuses = await api_client.fetch_wilaya_quotas(proxy_url=proxy_url)
+        logger.debug("API fetch complete. Found %d wilayas.", len(statuses))
         now = datetime.now(timezone.utc).isoformat()
 
         # Stamp the last successful fetch timestamp so /fetchinfo can report it
@@ -169,8 +175,54 @@ async def _poll_once(
                 # Reset auto-registration gate so it re-triggers next time quota opens
                 auto_reg_done: set[str] = app.bot_data.setdefault("auto_reg_done", set())
                 auto_reg_done.discard(wilaya_code)
-    except Exception:
-        logger.exception("Scheduler poll failed")
+    except Exception as e:
+        import httpx
+        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429:
+            # --- Fail-Safe Strategy ---
+            current_interval = app.bot_data.get("check_interval_seconds", 300)
+            new_interval = int(current_interval * 1.3)
+            
+            # Ensure it actually increases (at least by 1s)
+            if new_interval <= current_interval:
+                new_interval = current_interval + 1
+
+            app.bot_data["check_interval_seconds"] = new_interval
+            update_poll_interval(app, new_interval)
+
+            logger.warning(
+                "Rate limit hit (HTTP 429). Throttling: %ds -> %ds",
+                current_interval,
+                new_interval,
+            )
+
+            # Notify admin
+            admin_id = app.bot_data.get("admin_id")
+            if admin_id:
+                try:
+                    error_text = str(e)
+                    # Try to extract message from response if possible
+                    try:
+                        resp_json = e.response.json()
+                        if "message" in resp_json:
+                            error_text = resp_json["message"]
+                    except Exception:
+                        pass
+
+                    notif_msg = (
+                        "🚨 *Rate Limit Fail-Safe Triggered*\n\n"
+                        "The bot encountered a *Rate Limit (HTTP 429)* while checking quotas.\n\n"
+                        f"💬 *Error:* `{error_text}`\n\n"
+                        "🔄 *Action Taken:* Automatically increased check interval by 30%.\n"
+                        f"• Old interval: `{current_interval}s`\n"
+                        f"• New interval: `{new_interval}s`"
+                    )
+                    await app.bot.send_message(
+                        chat_id=admin_id, text=notif_msg, parse_mode="Markdown"
+                    )
+                except Exception:
+                    logger.exception("Failed to notify admin about rate limit trigger")
+        else:
+            logger.exception("Scheduler poll failed")
 
 async def remove_excess_profiles_job(app, db_path: str) -> None:
     logger.info("Running job to remove excess profiles (limit: 3).")
@@ -197,6 +249,26 @@ async def remove_excess_profiles_job(app, db_path: str) -> None:
 
 
 
+def update_poll_interval(app, new_interval_s: int):
+    """Reschedule the quota poll job with a new interval."""
+    scheduler = app.bot_data.get("scheduler")
+    if scheduler:
+        try:
+            scheduler.reschedule_job("quota_poll", trigger='interval', seconds=new_interval_s)
+            logger.info("Rescheduled quota_poll to every %ds", new_interval_s)
+        except Exception:
+            logger.exception("Failed to reschedule quota_poll job")
+
+# --- Periodic Job Wrappers ---
+
+async def reminder_wrapper(app):
+    """Bridge for the pre-registered profile reminder job."""
+    await remind_preregistered_profiles(app)
+
+async def excess_profiles_wrapper(app, db_path: str):
+    """Bridge for the excess profile removal job."""
+    await remove_excess_profiles_job(app, db_path)
+
 def start_scheduler(
     *,
     app,
@@ -206,14 +278,13 @@ def start_scheduler(
     confirm_fetches: int = 2,
     confirm_delay_s: float = 1.0,
 ) -> AsyncIOScheduler:
+    """Initialize and start the background task scheduler."""
+    
     # Bind scheduler to the currently running application event loop.
-    # If we schedule a *sync* callable, APScheduler may run it in a worker thread
-    # (no asyncio loop). Scheduling the coroutine directly keeps execution on
-    # the app loop and works reliably on Windows + Docker.
     scheduler = AsyncIOScheduler(event_loop=asyncio.get_running_loop())
 
-    async def job_wrapper():
-        # APScheduler calls a normal callable; we bridge into async.
+    async def quota_poll_wrapper():
+        """Main loop for wilaya quota monitoring."""
         await _poll_once(
             app=app,
             db_path=db_path,
@@ -222,30 +293,28 @@ def start_scheduler(
             confirm_delay_s=confirm_delay_s,
         )
 
+    # 1. Quota Polling Job
     scheduler.add_job(
-        job_wrapper,
+        quota_poll_wrapper,
         "interval",
         seconds=interval_s,
         max_instances=1,
         misfire_grace_time=60,
+        id="quota_poll",
     )
 
-    # 12-hour reminder for pre-registered profiles needing OTP verification
-    async def reminder_wrapper():
-        await remind_preregistered_profiles(app)
-
+    # 2. 12-hour OTP Verification Reminder
     scheduler.add_job(
         reminder_wrapper,
         "interval",
+        args=[app],
         hours=12,
         max_instances=1,
         misfire_grace_time=300,
+        id="otp_reminder",
     )
 
-    async def excess_profiles_wrapper():
-        await remove_excess_profiles_job(app, db_path)
-
-    # Fixed time: May 10, 2026 at 10:00 AM Algeria time (UTC+1)
+    # 3. Excess Profile Removal (scheduled for a specific date or shortly after startup)
     alg_tz = timezone(timedelta(hours=1))
     fixed_removal_date = datetime(2026, 5, 10, 10, 0, 0, tzinfo=alg_tz)
     
@@ -254,14 +323,18 @@ def start_scheduler(
             excess_profiles_wrapper,
             "date",
             run_date=fixed_removal_date,
+            args=[app, db_path],
             misfire_grace_time=3600 * 24, # 24h grace
+            id="excess_removal",
         )
     else:
-        # If we missed it (bot rebooted after deadline), run it shortly after startup
+        # If we missed the deadline (bot rebooted after), run it shortly after startup
         scheduler.add_job(
             excess_profiles_wrapper,
             "date",
             run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
+            args=[app, db_path],
+            id="excess_removal_catchup",
         )
 
     scheduler.start()

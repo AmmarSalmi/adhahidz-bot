@@ -203,7 +203,9 @@ class QuotaApiClient:
         # Add cache-busting parameter to bypass CDN/proxy caches
         path = f"/api/v1/public/wilaya-quotas?_t={int(time.time() * 1000)}"
         
-        # If proxy is requested, we use a temporary session
+        mode = "via proxy" if proxy_url else "directly"
+        logger.info("Fetching quotas from adhahi.dz %s...", mode)
+        
         if proxy_url:
             async with self.create_session(proxy_url=proxy_url) as client:
                 return await self._fetch_with_client(client, path)
@@ -223,14 +225,25 @@ class QuotaApiClient:
                         response=resp,
                     )
                 resp.raise_for_status()
+                logger.info("Quota API request successful (HTTP %d)", resp.status_code)
                 payload = resp.json()
                 statuses = parse_wilaya_quotas(payload)
                 return {s.wilaya_code: s for s in statuses}
+            except httpx.HTTPStatusError as e:
+                last_exc = e
+                if e.response.status_code == 429:
+                    # Rate limit hit: raise immediately so the scheduler can react
+                    raise
+                if attempt == 2:
+                    break
+                logger.warning("Quota API request failed (HTTP %s, attempt %s/3); retrying in %.1fs", e.response.status_code, attempt + 1, delay_s)
+                await asyncio.sleep(delay_s)
+                delay_s = min(delay_s * 2, 5.0)
             except Exception as e:
                 last_exc = e
                 if attempt == 2:
                     break
-                logger.warning("Quota API request failed (attempt %s/3); retrying in %.1fs", attempt + 1, delay_s)
+                logger.warning("Quota API request failed (%s, attempt %s/3); retrying in %.1fs", type(e).__name__, attempt + 1, delay_s)
                 await asyncio.sleep(delay_s)
                 delay_s = min(delay_s * 2, 5.0)
 

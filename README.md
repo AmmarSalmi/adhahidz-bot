@@ -12,8 +12,10 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
 - **Profile Usage Limits**: Enforces a fair-usage limit of 3 registration profiles per user to ensure system stability and performance.
 - **Quota History & Analysis**: Automatically records every "OPEN" and "CLOSE" event for all Wilayas in the database. This data allows for analyzing quota patterns, measuring window durations, and understanding the frequency of availability changes. Recent history is visible directly in the admin stats panel.
-- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, **granular proxy controls**, and **recent quota event history**. Commands like `/checkprofile` are restricted to administrators.
-- **Granular Proxy Management**: Admin can independently toggle Databay residential proxy usage for three critical workflows: Wilaya quota monitoring, Automated registration/ordering, and Profile status checking.
+- **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, **live check interval updates**, **granular proxy controls**, and **recent quota event history**. Commands like `/checkprofile` are restricted to administrators.
+- **Rate Limit Fail-Safe Strategy**: The bot is highly reactive to server-side blocking. If an HTTP 429 (Too Many Requests) is detected during quota monitoring, the bot automatically **increases the check interval by 30%** and immediately alerts the administrator with the error details.
+- **Improved Log Stream**: Suppresses verbose library success logs (HTTP 200s) to keep the stream focused on critical bot activity and Wilaya monitoring events.
+- **Granular Proxy Management**: Admin can independently toggle Databay residential proxy usage for three critical workflows: Wilaya quota monitoring, Automated registration/ordering, and Profile status checking. When proxying is enabled for Wilaya checks, the bot prompts for a specific check interval to optimize bandwidth.
 
 ### Prerequisites
 - Docker + Docker Compose

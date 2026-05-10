@@ -40,6 +40,7 @@ AWAIT_BROADCAST_MESSAGE = 1
 AWAIT_BROADCAST_CONFIRM = 2
 AWAIT_PROXY_TEST_CONFIG = 3
 AWAIT_CONCURRENCY_LIMIT = 4
+AWAIT_WILAYA_INTERVAL = 5
 
 # ---------------------------------------------------------------------------
 # Admin identity — loaded once from env at import time
@@ -324,7 +325,7 @@ async def on_admin_proxy_submenu(
 
 async def on_admin_toggle_proxy(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> int | None:
     """Toggle specific proxy usage settings."""
     query = update.callback_query
     if not query:
@@ -350,6 +351,20 @@ async def on_admin_toggle_proxy(
     new_state = not current
 
     logger.info("Admin toggled %s → %s", key, new_state)
+    
+    if key_suffix == "wilaya" and new_state:
+        current_interval = context.application.bot_data.get("check_interval_seconds", 300)
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("❌ Cancel", callback_data="admin:proxy_cancel")]]
+        )
+        await query.edit_message_text(
+            f"🌐 *Proxy Enabled for Quota Checks*\n\n"
+            f"Current check interval: `{current_interval}` seconds.\n\n"
+            "Please enter the new interval in *seconds* (e.g., `60` for 1 minute):",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        return AWAIT_WILAYA_INTERVAL
 
     keyboard = _proxy_submenu_keyboard(context)
     await query.edit_message_text(
@@ -358,6 +373,7 @@ async def on_admin_toggle_proxy(
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
+    return ConversationHandler.END
 
 
 async def on_admin_set_concurrency(
@@ -418,6 +434,57 @@ async def on_admin_concurrency_received(update: Update, context: ContextTypes.DE
         "This will take effect for the next registration cycle.",
         parse_mode="Markdown"
     )
+    return ConversationHandler.END
+
+
+async def on_admin_wilaya_interval_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive the new wilaya check interval and update the scheduler."""
+    if not is_admin(update):
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_WILAYA_INTERVAL
+
+    try:
+        val = int(msg.text.strip())
+        if not (10 <= val <= 3600):
+            raise ValueError("Out of range")
+    except ValueError:
+        await msg.reply_text(
+            "❌ *Invalid Input*\n\nPlease enter an integer between *10 and 3600* seconds.", 
+            parse_mode="Markdown"
+        )
+        return AWAIT_WILAYA_INTERVAL
+
+    # Update data and reschedule
+    context.application.bot_data["check_interval_seconds"] = val
+    from .scheduler import update_poll_interval
+    update_poll_interval(context.application, val)
+
+    logger.info("Admin updated wilaya poll interval to %d seconds", val)
+
+    await msg.reply_text(
+        f"✅ *Poll Interval Updated*\n\n"
+        f"New interval: `{val}` seconds.\n"
+        "The scheduler has been updated.",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def on_admin_proxy_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel the interval update and return to proxy menu."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        keyboard = _proxy_submenu_keyboard(context)
+        await query.edit_message_text(
+            "🌐 *Proxy Management*\n\n"
+            "Interval update cancelled.",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
     return ConversationHandler.END
 
 
@@ -660,7 +727,7 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
         return ConversationHandler.END
 
     if query.data == "admin:broadcast_cancel":
-        await query.edit_message_text("🚫 Broadcast cancelled.")
+        await query.edit_message_text("🚫 Action cancelled.")
         return ConversationHandler.END
 
     if query.data == "admin:broadcast_confirm_yes":
@@ -731,7 +798,8 @@ def build_admin_broadcast_handler() -> ConversationHandler:
         entry_points=[
             CallbackQueryHandler(on_admin_broadcast_start, pattern=r"^admin:broadcast_start$"),
             CallbackQueryHandler(on_admin_test_proxy, pattern=r"^admin:test_proxy$"),
-            CallbackQueryHandler(on_admin_set_concurrency, pattern=r"^admin:set_concurrency$")
+            CallbackQueryHandler(on_admin_set_concurrency, pattern=r"^admin:set_concurrency$"),
+            CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:wilaya$")
         ],
         states={
             AWAIT_BROADCAST_MESSAGE: [
@@ -748,6 +816,10 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             AWAIT_CONCURRENCY_LIMIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_concurrency_received),
                 CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
+            ],
+            AWAIT_WILAYA_INTERVAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_wilaya_interval_received),
+                CallbackQueryHandler(on_admin_proxy_cancel, pattern=r"^admin:proxy_cancel$")
             ],
         },
         fallbacks=[

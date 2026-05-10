@@ -34,6 +34,12 @@ def _configure_logging() -> None:
     level_str = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_str, logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    
+    # Suppress verbose HTTP logs from libraries
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+    # Also suppress apscheduler if it's too noisy
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 
 async def _load_wilayas(api: QuotaApiClient, db_path: str | None = None) -> list[tuple[str, str]]:
@@ -72,9 +78,12 @@ async def _post_init(app: Application) -> None:
     await init_db(db_path)
 
     api = QuotaApiClient(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
+    from .admin import ADMIN_TELEGRAM_ID
     app.bot_data["db_path"] = db_path
     app.bot_data["api_client"] = api
+    app.bot_data["admin_id"] = ADMIN_TELEGRAM_ID
     app.bot_data["max_concurrent_sessions"] = max_concurrent
+    app.bot_data["check_interval_seconds"] = interval_s
     
     # Global semaphore for auto-registration connections
     import asyncio
