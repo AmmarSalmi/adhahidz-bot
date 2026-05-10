@@ -370,7 +370,7 @@ async def on_commune_selected(
     await query.edit_message_text(
         f"✅ Commune *{commune_name}* selected.\n\n"
         "Step 6/10 — Enter a *password* for your adhahi.dz account:\n"
-        "_(8-12 characters, must include upper, lower, digit, and symbol from @#$%^&+=)_",
+        "_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_",
         parse_mode="Markdown",
     )
     return ASK_PASSWORD
@@ -525,16 +525,18 @@ def _validate_password(pw: str) -> list[str]:
     errors: list[str] = []
     if len(pw) < 8:
         errors.append("Must be at least 8 characters long")
-    if len(pw) > 12:
-        errors.append("Must be no more than 12 characters long")
+    if len(pw) > 16:
+        errors.append("Must be no more than 16 characters long")
     if not any(c.isdigit() for c in pw):
         errors.append("Must contain at least one digit (0-9)")
     if not any(c.islower() for c in pw):
         errors.append("Must contain at least one lowercase letter (a-z)")
     if not any(c.isupper() for c in pw):
         errors.append("Must contain at least one uppercase letter (A-Z)")
-    if not any(c in "@#$%^&+=" for c in pw):
-        errors.append("Must contain at least one special character from: @ # $ % ^ & + =")
+    if not any(c in "!@#$%^&*()_+-=?" for c in pw):
+        errors.append("Must contain at least one special character (!@#$%^&*()_+-=?)")
+    if "." in pw:
+        errors.append("The dot (.) character is not allowed in passwords")
     if any(c.isspace() for c in pw):
         errors.append("Must not contain whitespace")
     return errors

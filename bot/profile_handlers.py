@@ -133,7 +133,7 @@ async def ap_collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         "✅ Phone recorded.\n\n"
         "Step 5/9 — Enter a *password* for the adhahi.dz account:\n"
-        "_(8-12 characters, must include upper, lower, digit, and symbol from @#$%^&+=)_",
+        "_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_",
         parse_mode="Markdown",
     )
     return AP_PASSWORD
