@@ -26,6 +26,8 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Modernized PTB Compatibility**: Fully optimized for `python-telegram-bot` v20/v21. Includes resolved `ChatMemberStatus` imports and a specialized warning suppression engine in `bot/main.py` to keep the console output clean and focused on critical events.
 - **Robust Error Resilience**: Implemented a global exception handler that intelligently filters out harmless Telegram API errors (like "Message is not modified" from double-clicks) and gracefully handles blocked-bot scenarios. This ensures maximum uptime and a clean, high-signal log stream for production monitoring.
 - **Admin Error & Warning Inbox**: A centralized, persistent monitoring system that intercepts all `ERROR` and `WARNING` log events. Features real-time Telegram notifications for admins, a filterable paginated dashboard (by level, status, and date range), and a resolution tracking system to manage system health.
+- **Database Maintenance & Cleanup Tool**: A proactive admin tool that scans the entire database for data integrity issues. Automatically fixes malformed optional fields (like emails) and sends real-time notifications to users with invalid NIN, CNIBE, or Password data, ensuring they are ready before the next quota window opens.
+- **Strict Server-Sync Validation**: Implements strict 8-12 character password validation and restricted symbol sets that are directly synchronized with the `adhahi.dz` server requirements, preventing avoidable registration failures.
 
 ### Prerequisites
 - Docker + Docker Compose
