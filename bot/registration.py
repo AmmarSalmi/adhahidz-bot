@@ -370,7 +370,7 @@ async def on_commune_selected(
     await query.edit_message_text(
         f"✅ Commune *{commune_name}* selected.\n\n"
         "Step 6/10 — Enter a *password* for your adhahi.dz account:\n"
-        "_(at least 6 characters)_",
+        "_(8-12 characters, must include upper, lower, digit, and symbol)_",
         parse_mode="Markdown",
     )
     return ASK_PASSWORD
@@ -523,16 +523,18 @@ async def on_payment_method_selected(
 def _validate_password(pw: str) -> list[str]:
     """Return a list of error strings; empty means valid."""
     errors: list[str] = []
-    if len(pw) < 6:
-        errors.append("Must be at least 6 characters long")
+    if len(pw) < 8:
+        errors.append("Must be at least 8 characters long")
+    if len(pw) > 12:
+        errors.append("Must be no more than 12 characters long")
     if not any(c.isdigit() for c in pw):
         errors.append("Must contain at least one digit (0-9)")
     if not any(c.islower() for c in pw):
         errors.append("Must contain at least one lowercase letter (a-z)")
     if not any(c.isupper() for c in pw):
         errors.append("Must contain at least one uppercase letter (A-Z)")
-    if not any(c in "!@#$%^&*()_+-=[]{}|;':\",./<>?`~" for c in pw):
-        errors.append("Must contain at least one special character")
+    if not any(c in "!@#$%^&*()_+-=" for c in pw):
+        errors.append("Must contain at least one special character (!@#$%^&*()_+-=)")
     if any(c.isspace() for c in pw):
         errors.append("Must not contain whitespace")
     return errors
@@ -571,9 +573,10 @@ async def _submit_registration(
             headers=headers,
         )
     except Exception as exc:
-        logger.error("Registration request failed (network error): %s", exc)
+        err_type = type(exc).__name__
+        logger.error("Registration request failed (%s): %s", err_type, exc)
         await update.effective_message.reply_text(
-            f"❌ Registration failed due to a network error:\n`{exc}`\n\n"
+            f"❌ Registration failed due to a network error ({err_type}):\n`{exc}`\n\n"
             "Please try again with /register.",
             parse_mode="Markdown",
         )
@@ -680,9 +683,10 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             headers=headers,
         )
     except Exception as exc:
-        logger.error("OTP verification request failed (network error): %s", exc)
+        err_type = type(exc).__name__
+        logger.error("OTP verification request failed (%s): %s", err_type, exc)
         await update.effective_message.reply_text(
-            f"❌ OTP verification failed due to a network error:\n`{exc}`\n\n"
+            f"❌ OTP verification failed due to a network error ({err_type}):\n`{exc}`\n\n"
             "Please try again with /register.",
             parse_mode="Markdown",
         )
@@ -797,7 +801,8 @@ async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: prof
                 headers=headers,
             )
         except Exception as exc:
-            return "error", f"Network error: {exc}", 0
+            err_type = type(exc).__name__
+            return "error", f"{err_type}: {exc}", 0
 
         if 200 <= resp.status_code < 300:
             return "pre-registered", "An OTP has been sent — use /verifyotp to complete verification.", resp.status_code

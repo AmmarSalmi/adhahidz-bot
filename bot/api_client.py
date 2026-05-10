@@ -231,21 +231,58 @@ class QuotaApiClient:
                 return {s.wilaya_code: s for s in statuses}
             except httpx.HTTPStatusError as e:
                 last_exc = e
-                if e.response.status_code == 429:
+                status_code = e.response.status_code
+                if status_code == 429:
                     # Rate limit hit: raise immediately so the scheduler can react
                     raise
+                
+                # Try to extract error message from response body
+                detail = ""
+                try:
+                    resp_data = e.response.json()
+                    detail = f" - {resp_data.get('message') or resp_data.get('error') or ''}"
+                except Exception:
+                    pass
+
                 if attempt == 2:
                     break
-                logger.warning("Quota API request failed (HTTP %s, attempt %s/3); retrying in %.1fs", e.response.status_code, attempt + 1, delay_s)
+                
+                logger.warning(
+                    "Quota API request failed (HTTP %s%s, attempt %s/3); retrying in %.1fs",
+                    status_code, detail, attempt + 1, delay_s
+                )
+                await asyncio.sleep(delay_s)
+                delay_s = min(delay_s * 2, 5.0)
+            except (httpx.ConnectError, httpx.ProxyError) as e:
+                last_exc = e
+                if attempt == 2:
+                    break
+                logger.warning(
+                    "Network/Proxy connection failed (%s: %s, attempt %s/3); retrying in %.1fs",
+                    type(e).__name__, str(e), attempt + 1, delay_s
+                )
+                await asyncio.sleep(delay_s)
+                delay_s = min(delay_s * 2, 5.0)
+            except httpx.TimeoutException as e:
+                last_exc = e
+                if attempt == 2:
+                    break
+                logger.warning(
+                    "Request timed out (%s, attempt %s/3); retrying in %.1fs",
+                    type(e).__name__, attempt + 1, delay_s
+                )
                 await asyncio.sleep(delay_s)
                 delay_s = min(delay_s * 2, 5.0)
             except Exception as e:
                 last_exc = e
                 if attempt == 2:
                     break
-                logger.warning("Quota API request failed (%s, attempt %s/3); retrying in %.1fs", type(e).__name__, attempt + 1, delay_s)
+                logger.warning(
+                    "Unexpected API error (%s: %s, attempt %s/3); retrying in %.1fs",
+                    type(e).__name__, str(e), attempt + 1, delay_s
+                )
                 await asyncio.sleep(delay_s)
                 delay_s = min(delay_s * 2, 5.0)
 
-        logger.error("Quota API request failed after retries: %s", last_exc)
+        logger.error("Quota API request failed after 3 attempts. Final error: %s: %s", type(last_exc).__name__, last_exc)
         return {}

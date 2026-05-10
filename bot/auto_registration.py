@@ -73,7 +73,8 @@ async def _fetch_and_solve_captcha(
         logger.info("CAPTCHA solved by %s: id=%s answer=%s", used_solver.name, captcha_id, solved_text)
         return captcha_id, solved_text, image_bytes
     except Exception as exc:
-        logger.error("Failed to fetch/solve captcha (%s): %s", used_solver.name, exc)
+        err_type = type(exc).__name__
+        logger.error("Failed to fetch/solve captcha (%s) using %s: %s", err_type, used_solver.name, exc)
         return None
 
 
@@ -149,8 +150,9 @@ async def _try_submit_profile(
         try:
             resp = await client.post("/api/v2/citizens/register", json=body, headers=req_headers)
         except Exception as exc:
-            logger.error("Submit network error profile=%s: %s", profile.id, exc)
-            return profile, "error", str(exc)
+            err_type = type(exc).__name__
+            logger.error("Submit network error profile=%s (%s): %s", profile.id, err_type, exc)
+            return profile, "error", f"{err_type}: {exc}"
 
         logger.info(
             "Submit profile=%s attempt=%d solver=%s status=%s body=%s",
@@ -250,8 +252,9 @@ async def _try_login_and_order(
         try:
             resp = await client.post("/api/v1/citizens/login", json=login_body, headers=login_headers)
         except Exception as exc:
-            logger.error("Login network error profile=%s: %s", profile.id, exc)
-            return profile, "error", str(exc)
+            err_type = type(exc).__name__
+            logger.error("Login network error profile=%s (%s): %s", profile.id, err_type, exc)
+            return profile, "error", f"{err_type}: {exc}"
 
         logger.info(
             "Login profile=%s attempt=%d solver=%s status=%s body=%s",
@@ -305,8 +308,9 @@ async def _try_login_and_order(
     try:
         resp = await client.post("/api/v1/orders", json=order_body, headers=order_headers)
     except Exception as exc:
-        logger.error("Order network error profile=%s: %s", profile.id, exc)
-        return profile, "error", str(exc)
+        err_type = type(exc).__name__
+        logger.error("Order network error profile=%s (%s): %s", profile.id, err_type, exc)
+        return profile, "error", f"{err_type}: {exc}"
 
     logger.info(
         "Order profile=%s status=%s body=%s",
@@ -480,8 +484,9 @@ async def _nudge_preregistered_profiles(
                             "OTP resend failed for profile %s: HTTP %s %s",
                             profile.id, resp.status_code, resp.text,
                         )
-                except Exception:
-                    logger.exception("OTP resend network error for profile %s", profile.id)
+                except Exception as exc:
+                    err_type = type(exc).__name__
+                    logger.error("OTP resend network error for profile %s (%s): %s", profile.id, err_type, exc)
 
         # Notify user urgently — don't wait for response
         try:

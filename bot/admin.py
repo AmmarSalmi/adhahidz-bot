@@ -1178,19 +1178,31 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception:
                     logger.exception("Failed to fix email for profile %s", p.id)
 
-        # Notify user if we fixed something
-        if user_fixed_count > 0:
-            msg = (
-                "⚠️ *Profile Maintenance Notification*\n\n"
-                "A routine check of our database detected that some of your profiles had an **invalid email format**.\n\n"
-                "To ensure your profiles remain compatible with the registration system, we have automatically set the invalid emails to **empty** (as they are optional).\n\n"
-                f"Number of profiles updated: *{user_fixed_count}*\n\n"
-                "If you wish to add a valid email, please use /profiles to edit your profile(s)."
-            )
+        # Notify user if we fixed something or found errors
+        if user_fixed_count > 0 or user_invalid_fields:
+            msg_parts = ["⚠️ *Profile Maintenance Notification*\n"]
+            
+            if user_fixed_count > 0:
+                msg_parts.append(
+                    f"Our routine check detected an **invalid email format** in {user_fixed_count} profile(s). "
+                    "We have automatically cleared those emails to ensure your profiles remain compatible.\n"
+                )
+            
+            if user_invalid_fields:
+                msg_parts.append(
+                    "We also found **major errors** in the following profiles that require your **manual correction**:\n"
+                )
+                for prof_name, field in user_invalid_fields:
+                    msg_parts.append(f"  • Profile *{prof_name}*: Invalid **{field}**")
+                
+                msg_parts.append(
+                    "\n⚠️ *Crucial:* Profiles with invalid NIN, CNIBE, or Password **will fail** when the wilaya opens. "
+                    "Please use /profiles to edit and fix them immediately."
+                )
+
             try:
-                await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="Markdown")
+                await context.bot.send_message(chat_id=user_id, text="\n".join(msg_parts), parse_mode="Markdown")
                 notifications_sent += 1
-                # Small delay to avoid hitting rate limits if there are many users
                 await asyncio.sleep(0.05) 
             except Exception as e:
                 logger.warning("Could not notify user %s: %s", user_id, e)
