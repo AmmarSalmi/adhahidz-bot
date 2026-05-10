@@ -29,8 +29,9 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.error import Forbidden
 
-from .db import get_user_language
+from . import db as db_mod
 from .proxy import get_proxy_url
 
 logger = logging.getLogger(__name__)
@@ -765,7 +766,7 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
                     rows = await cur.fetchall()
             
             for (user_id,) in rows:
-                user_lang = await get_user_language(db_path, user_id)
+                user_lang = await db_mod.get_user_language(db_path, user_id)
                 msg_text = translated_msgs.get(user_lang, translated_msgs["ar"])
                 
                 try:
@@ -775,6 +776,10 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
                         parse_mode="Markdown"
                     )
                     success += 1
+                except Forbidden:
+                    logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+                    await db_mod.delete_user_data(db_path, user_id)
+                    failed += 1
                 except Exception as e:
                     logger.warning("Failed to send broadcast to %s: %s", user_id, e)
                     failed += 1

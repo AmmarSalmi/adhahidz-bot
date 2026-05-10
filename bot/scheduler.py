@@ -93,7 +93,7 @@ async def _poll_once(
                 if to_notify:
                     remaining_txt = "unknown" if status.remaining is None else str(status.remaining)
                     msg = f"✅ Quota available in {status.wilaya_name}! Remaining: {remaining_txt} units."
-                    await notify_users(app.bot, to_notify, msg)
+                    await notify_users(app.bot, to_notify, msg, db_path=db_path)
                     await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
                 # Auto-registration: trigger every poll if actionable profiles exist (Aggressive Mode)
@@ -116,7 +116,7 @@ async def _poll_once(
                 if previously_notified:
                     wilaya_name = status.wilaya_name if status else wilaya_code
                     gone_msg = f"❌ Quota in {wilaya_name} is no longer available."
-                    await notify_users(app.bot, previously_notified, gone_msg)
+                    await notify_users(app.bot, previously_notified, gone_msg, db_path=db_path)
                 await db_mod.reset_notified_for_wilaya(db_path, wilaya_code)
     except Exception as e:
         import httpx

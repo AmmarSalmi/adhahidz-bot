@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from . import db as db_mod
@@ -465,3 +465,24 @@ async def on_wilaya_selected(update: Update, context: ContextTypes.DEFAULT_TYPE)
     wilaya_name = _lookup_wilaya_name(context, wilaya_code)
     text = t(lang, "You will be notified when quota is available in {wilaya_name}.").format(wilaya_name=wilaya_name)
     await query.edit_message_text(text)
+
+
+async def on_my_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Detect when a user blocks or unblocks the bot."""
+    if not update.my_chat_member:
+        return
+
+    new_status = update.my_chat_member.new_chat_member.status
+    user_id = update.effective_user.id
+
+    # In private chats, 'kicked' status means the user blocked the bot.
+    if new_status == ChatMember.KICKED:
+        logger.warning("User %s blocked the bot. Deleting all data.", user_id)
+        db_path = context.application.bot_data.get("db_path")
+        if db_path:
+            try:
+                await db_mod.delete_user_data(db_path, user_id)
+            except Exception:
+                logger.exception("Failed to delete data for blocked user %s", user_id)
+    elif new_status == ChatMember.MEMBER:
+        logger.info("User %s (re)started the bot.", user_id)

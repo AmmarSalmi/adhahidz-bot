@@ -19,6 +19,7 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Granular Proxy Management**: Admin can independently toggle residential proxy usage for three critical workflows: Wilaya monitoring, Auto-registration, and Profile status checking.
 - **Sticky Session Isolation**: Each profile interaction (registration, login, ordering) is isolated in its own HTTP session. When proxying is enabled, it uses **Sticky Session IDs** based on the citizen's NIN to ensure IP consistency across the entire registration lifecycle, avoiding WAF blocks.
 - **Resilient Registration Detection**: The bot now features enhanced detection for diverse API responses, including multilingual "already registered" messages (Arabic/French/English), allowing it to seamlessly transition from registration to the login+order flow without manual intervention.
+- **Automatic Resource Optimization**: To conserve system resources and ensure data privacy, the bot now automatically detects when a user blocks it (via near real-time `ChatMember` updates and proactive checks during scheduled tasks) and immediately deletes all associated data, including Wilaya subscriptions and registration profiles.
 
 ### Prerequisites
 - Docker + Docker Compose

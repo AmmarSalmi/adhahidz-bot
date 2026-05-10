@@ -5,14 +5,14 @@ import os
 
 from dotenv import load_dotenv
 from telegram import BotCommand
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
 
 from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy, on_admin_proxy_submenu
 
 from .api_client import QuotaApiClient
 from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
 from .db import init_db
-from .handlers import BOT_COMMANDS, change, checkprofile, fetchinfo, help_command, on_check_profile, on_wilaya_selected, start, status, stop, test_captcha_solvers
+from .handlers import BOT_COMMANDS, change, checkprofile, fetchinfo, help_command, on_check_profile, on_my_chat_member_update, on_wilaya_selected, start, status, stop, test_captcha_solvers
 from .profile_handlers import (
     build_addprofile_handler,
     build_editprofile_handler,
@@ -228,8 +228,9 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_view_profile, pattern=r"^view_prof:"))
     app.add_handler(CallbackQueryHandler(on_menu_nav, pattern=r"^menu:nav:"))
     app.add_handler(CallbackQueryHandler(on_menu_cmd, pattern=r"^menu:cmd:"))
+    app.add_handler(ChatMemberHandler(on_my_chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
 
-    app.run_polling(allowed_updates=["message", "callback_query"])
+    app.run_polling(allowed_updates=["message", "callback_query", "my_chat_member"])
 
 
 if __name__ == "__main__":

@@ -141,6 +141,19 @@ async def delete_subscription(db_path: str, user_id: int) -> bool:
     return bool(await _with_retries(_op))
 
 
+async def delete_user_data(db_path: str, user_id: int) -> None:
+    """Delete all data related to a user (subscriptions, settings, profiles)."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute("DELETE FROM subscriptions WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM user_settings WHERE user_id=?", (user_id,))
+            await db.execute("DELETE FROM profiles WHERE user_id=?", (user_id,))
+            await db.commit()
+
+    await _with_retries(_op)
+
+
 async def get_distinct_wilayas(db_path: str) -> list[str]:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")

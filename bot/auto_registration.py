@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 from telegram import Update
+from telegram.error import Forbidden
 from telegram.ext import (
     CommandHandler,
     ContextTypes,
@@ -31,11 +32,10 @@ from . import profile_db
 from .captcha_solver import CaptchaSolver, create_solvers
 from .proxy import get_proxy_url
 from .registration import (
-    _build_headers,
-    _close_http_client,
     _extract_error_message,
     _get_http_client,
 )
+from . import db as db_mod
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +348,9 @@ async def remind_preregistered_profiles(app) -> None:
                 parse_mode="Markdown",
             )
             logger.info("Sent pre-registered reminder to user %s (%d profiles)", user_id, len(profs))
+        except Forbidden:
+            logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+            await db_mod.delete_user_data(db_path, user_id)
         except Exception:
             logger.exception("Failed to send reminder to user %s", user_id)
 
@@ -503,6 +506,9 @@ async def _nudge_preregistered_profiles(
                     ),
                     parse_mode="Markdown",
                 )
+        except Forbidden:
+            logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+            await db_mod.delete_user_data(db_path, user_id)
         except Exception:
             logger.exception("Failed to send urgent nudge to user %s", user_id)
 
@@ -519,71 +525,80 @@ async def _process_registered_profiles(
 
     Each profile uses a dedicated sticky proxy session to ensure IP consistency.
     """
+    if not profiles:
+        return
+    user_id = profiles[0].user_id
     sem = app.bot_data["concurrency_semaphore"]
-    async def _run_sticky_login_and_order(p: profile_db.Profile):
-        async with sem:
-            proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
-            async with api_client.create_session(proxy_url=proxy_url) as client:
-                return await _try_login_and_order(p, client, base_headers)
 
-    results = await asyncio.gather(
-        *[_run_sticky_login_and_order(p) for p in profiles],
-        return_exceptions=True
-    )
+    try:
+        async def _run_sticky_login_and_order(p: profile_db.Profile):
+            async with sem:
+                proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
+                async with api_client.create_session(proxy_url=proxy_url) as client:
+                    return await _try_login_and_order(p, client, base_headers)
 
-    for result in results:
-        if isinstance(result, Exception):
-            logger.error("Unexpected error in login+order: %s", result)
-            continue
+        results = await asyncio.gather(
+            *[_run_sticky_login_and_order(p) for p in profiles],
+            return_exceptions=True
+        )
 
-        profile, outcome, detail = result
-        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-        user_id = profile.user_id
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error("Unexpected error in login+order: %s", result)
+                continue
 
-        if outcome == "ordered":
-            await profile_db.set_profile_status(db_path, profile.id, "ordered")
-            await app.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"🐑 *Order placed!*\n\n"
-                    f"Profile: *{profile.name or masked}*\n"
-                    f"Phone: `{profile.phone}`\n\n"
-                    "Your order has been submitted successfully!"
-                ),
-                parse_mode="Markdown",
-            )
-        elif outcome == "order_fail":
-            logger.error("Order failed for profile %s: %s", profile.id, detail)
-            await profile_db.set_profile_status(db_path, profile.id, "registered")
-            await app.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"❌ *Order failed for {profile.name or masked}*\n\n"
-                    f"Error: {detail}\n\n"
-                    "The profile is still registered. Will retry next time quota is available."
-                ),
-                parse_mode="Markdown",
-            )
-        elif outcome == "login_fail":
-            logger.error("Login failed for profile %s: %s", profile.id, detail)
-            await profile_db.set_profile_status(db_path, profile.id, "registered")
-            await app.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"❌ *Login failed for {profile.name or masked}*\n\n"
-                    f"Error: {detail}\n\n"
-                    "Will retry next time quota is available."
-                ),
-                parse_mode="Markdown",
-            )
-        else:
-            logger.error("Login+order error for profile %s: %s", profile.id, detail)
-            await profile_db.set_profile_status(db_path, profile.id, "registered")
-            await app.bot.send_message(
-                chat_id=user_id,
-                text=f"❌ Error for profile *{profile.name or masked}*:\n{detail}",
-                parse_mode="Markdown",
-            )
+            profile, outcome, detail = result
+            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+
+            if outcome == "ordered":
+                await profile_db.set_profile_status(db_path, profile.id, "ordered")
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"🐑 *Order placed!*\n\n"
+                        f"Profile: *{profile.name or masked}*\n"
+                        f"Phone: `{profile.phone}`\n\n"
+                        "Your order has been submitted successfully!"
+                    ),
+                    parse_mode="Markdown",
+                )
+            elif outcome == "order_fail":
+                logger.error("Order failed for profile %s: %s", profile.id, detail)
+                await profile_db.set_profile_status(db_path, profile.id, "registered")
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"❌ *Order failed for {profile.name or masked}*\n\n"
+                        f"Error: {detail}\n\n"
+                        "The profile is still registered. Will retry next time quota is available."
+                    ),
+                    parse_mode="Markdown",
+                )
+            elif outcome == "login_fail":
+                logger.error("Login failed for profile %s: %s", profile.id, detail)
+                await profile_db.set_profile_status(db_path, profile.id, "registered")
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"❌ *Login failed for {profile.name or masked}*\n\n"
+                        f"Error: {detail}\n\n"
+                        "Will retry next time quota is available."
+                    ),
+                    parse_mode="Markdown",
+                )
+            else:
+                logger.error("Login+order error for profile %s: %s", profile.id, detail)
+                await profile_db.set_profile_status(db_path, profile.id, "registered")
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=f"❌ Error for profile *{profile.name or masked}*:\n{detail}",
+                    parse_mode="Markdown",
+                )
+    except Forbidden:
+        logger.warning("Bot was blocked by user_id=%s. Deleting all data.", user_id)
+        await db_mod.delete_user_data(db_path, user_id)
+    except Exception:
+        logger.exception("Failed to process registered profiles for user %s", user_id)
 
 
 async def _process_user_profiles(
@@ -599,165 +614,170 @@ async def _process_user_profiles(
 
     Each profile uses a dedicated sticky proxy session to ensure IP consistency.
     """
-
-    sem = app.bot_data["concurrency_semaphore"]
-    async def _run_sticky_submit(p: profile_db.Profile):
-        async with sem:
-            proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
-            async with api_client.create_session(proxy_url=proxy_url) as client:
-                return await _try_submit_profile(p, client, base_headers)
-
-    # ── Phase 1: Concurrent auto-CAPTCHA ──
-    results = await asyncio.gather(
-        *[_run_sticky_submit(p) for p in profiles],
-        return_exceptions=True
-    )
-
-    remaining: list[profile_db.Profile] = []
-    ip_blocked = False
-
-    for result in results:
-        if isinstance(result, Exception):
-            logger.error("Unexpected error in concurrent submit: %s", result)
-            continue
-
-        profile, outcome, detail = result
-
-        if outcome == "submitted":
-            await profile_db.set_profile_status(db_path, profile.id, "submitted")
-            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-            await app.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"✅ *Registration submitted!*\n\n"
-                    f"Profile: *{profile.name or masked}*\n"
-                    f"Phone: `{profile.phone}`\n\n"
-                    "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
-                ),
-                parse_mode="Markdown",
-            )
-        elif outcome == "already_registered":
-            # Switch to login + order flow immediately
-            logger.info("Profile %s already registered. Switching to login flow.", profile.id)
-            await profile_db.set_profile_status(db_path, profile.id, "registered")
-            
+    try:
+        sem = app.bot_data["concurrency_semaphore"]
+        async def _run_sticky_submit(p: profile_db.Profile):
             async with sem:
-                proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+                proxy_url = get_proxy_url(session_id=p.nin) if use_proxy else None
                 async with api_client.create_session(proxy_url=proxy_url) as client:
-                    l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
-            
-            masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-            if l_outcome == "ordered":
-                await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                    return await _try_submit_profile(p, client, base_headers)
+
+        # ── Phase 1: Concurrent auto-CAPTCHA ──
+        results = await asyncio.gather(
+            *[_run_sticky_submit(p) for p in profiles],
+            return_exceptions=True
+        )
+
+        remaining: list[profile_db.Profile] = []
+        ip_blocked = False
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error("Unexpected error in concurrent submit: %s", result)
+                continue
+
+            profile, outcome, detail = result
+
+            if outcome == "submitted":
+                await profile_db.set_profile_status(db_path, profile.id, "submitted")
+                masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
                 await app.bot.send_message(
                     chat_id=user_id,
                     text=(
-                        f"🐑 *Order placed!*\n\n"
-                        f"Profile: *{l_profile.name or masked}*\n"
-                        "Account was already active; order was submitted successfully!"
+                        f"✅ *Registration submitted!*\n\n"
+                        f"Profile: *{profile.name or masked}*\n"
+                        f"Phone: `{profile.phone}`\n\n"
+                        "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
                     ),
                     parse_mode="Markdown",
                 )
-            else:
-                await app.bot.send_message(
-                    chat_id=user_id,
-                    text=(
-                        f"🟡 *Account already active for {profile.name or masked}*\n\n"
-                        f"I tried to log in and place an order, but failed: {l_detail}\n"
-                        "Status updated to *registered*. Will retry order next time."
-                    ),
-                    parse_mode="Markdown",
-                )
-        elif outcome == "ip_blocked":
-            ip_blocked = True
-            await profile_db.set_profile_status(db_path, profile.id, "pending")
-            remaining.append(profile)
-        elif outcome == "captcha_fail":
-            await profile_db.set_profile_status(db_path, profile.id, "pending")
-            remaining.append(profile)
-        else:
-            await profile_db.set_profile_status(db_path, profile.id, "failed")
-            await app.bot.send_message(
-                chat_id=user_id,
-                text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
-                parse_mode="Markdown",
-            )
-
-    if not remaining:
-        return
-
-    # ── Phase 2: Sequential fallback ──
-    if ip_blocked:
-        logger.info("IP block detected for user %s — switching to sequential", user_id)
-
-    # Sort remaining by priority
-    remaining.sort(key=lambda p: p.priority)
-
-    for profile in remaining:
-        async with sem:
-            proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
-            async with api_client.create_session(proxy_url=proxy_url) as client:
-                p_result = await _try_submit_profile(profile, client, base_headers)
-                _, outcome, detail = p_result
-
-                if outcome == "submitted":
-                    await profile_db.set_profile_status(db_path, profile.id, "submitted")
-                    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+            elif outcome == "already_registered":
+                # Switch to login + order flow immediately
+                logger.info("Profile %s already registered. Switching to login flow.", profile.id)
+                await profile_db.set_profile_status(db_path, profile.id, "registered")
+                
+                async with sem:
+                    proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+                    async with api_client.create_session(proxy_url=proxy_url) as client:
+                        l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
+                
+                masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                if l_outcome == "ordered":
+                    await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
                     await app.bot.send_message(
                         chat_id=user_id,
                         text=(
-                            f"✅ *Registration submitted!*\n\n"
-                            f"Profile: *{profile.name or masked}*\n"
-                            f"Phone: `{profile.phone}`\n\n"
-                            "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
+                            f"🐑 *Order placed!*\n\n"
+                            f"Profile: *{l_profile.name or masked}*\n"
+                            "Account was already active; order was submitted successfully!"
                         ),
                         parse_mode="Markdown",
                     )
-                elif outcome == "already_registered":
-                    # Switch to login + order flow immediately
-                    logger.info("Profile %s already registered (Phase 2). Switching to login flow.", profile.id)
-                    await profile_db.set_profile_status(db_path, profile.id, "registered")
-                    
-                    l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
-                    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-                    if l_outcome == "ordered":
-                        await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
-                        await app.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🐑 *Order placed!*\n\n"
-                                f"Profile: *{l_profile.name or masked}*\n"
-                                "Account was already active; order was submitted successfully!"
-                            ),
-                            parse_mode="Markdown",
-                        )
-                    else:
-                        await app.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🟡 *Account already active for {profile.name or masked}*\n\n"
-                                f"I tried to log in and place an order, but failed: {l_detail}\n"
-                                "Status updated to *registered*. Will retry order next time."
-                            ),
-                            parse_mode="Markdown",
-                        )
-                elif outcome == "ip_blocked":
-                    await profile_db.set_profile_status(db_path, profile.id, "pending")
-                    await app.bot.send_message(
-                        chat_id=user_id,
-                        text=f"⚠️ *IP Blocked during Phase 2* for {profile.name or masked}. Resetting to pending.",
-                        parse_mode="Markdown",
-                    )
-                elif outcome == "captcha_fail":
-                    # Queue manual CAPTCHA for user
-                    await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)
                 else:
-                    await profile_db.set_profile_status(db_path, profile.id, "failed")
                     await app.bot.send_message(
                         chat_id=user_id,
-                        text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
+                        text=(
+                            f"🟡 *Account already active for {profile.name or masked}*\n\n"
+                            f"I tried to log in and place an order, but failed: {l_detail}\n"
+                            "Status updated to *registered*. Will retry order next time."
+                        ),
                         parse_mode="Markdown",
                     )
+            elif outcome == "ip_blocked":
+                ip_blocked = True
+                await profile_db.set_profile_status(db_path, profile.id, "pending")
+                remaining.append(profile)
+            elif outcome == "captcha_fail":
+                await profile_db.set_profile_status(db_path, profile.id, "pending")
+                remaining.append(profile)
+            else:
+                await profile_db.set_profile_status(db_path, profile.id, "failed")
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
+                    parse_mode="Markdown",
+                )
+
+        if not remaining:
+            return
+
+        # ── Phase 2: Sequential fallback ──
+        if ip_blocked:
+            logger.info("IP block detected for user %s — switching to sequential", user_id)
+
+        # Sort remaining by priority
+        remaining.sort(key=lambda p: p.priority)
+
+        for profile in remaining:
+            async with sem:
+                proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+                async with api_client.create_session(proxy_url=proxy_url) as client:
+                    p_result = await _try_submit_profile(profile, client, base_headers)
+                    _, outcome, detail = p_result
+
+                    if outcome == "submitted":
+                        await profile_db.set_profile_status(db_path, profile.id, "submitted")
+                        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                        await app.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"✅ *Registration submitted!*\n\n"
+                                f"Profile: *{profile.name or masked}*\n"
+                                f"Phone: `{profile.phone}`\n\n"
+                                "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
+                            ),
+                            parse_mode="Markdown",
+                        )
+                    elif outcome == "already_registered":
+                        # Switch to login + order flow immediately
+                        logger.info("Profile %s already registered (Phase 2). Switching to login flow.", profile.id)
+                        await profile_db.set_profile_status(db_path, profile.id, "registered")
+                        
+                        l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
+                        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                        if l_outcome == "ordered":
+                            await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                            await app.bot.send_message(
+                                chat_id=user_id,
+                                text=(
+                                    f"🐑 *Order placed!*\n\n"
+                                    f"Profile: *{l_profile.name or masked}*\n"
+                                    "Account was already active; order was submitted successfully!"
+                                ),
+                                parse_mode="Markdown",
+                            )
+                        else:
+                            await app.bot.send_message(
+                                chat_id=user_id,
+                                text=(
+                                    f"🟡 *Account already active for {profile.name or masked}*\n\n"
+                                    f"I tried to log in and place an order, but failed: {l_detail}\n"
+                                    "Status updated to *registered*. Will retry order next time."
+                                ),
+                                parse_mode="Markdown",
+                            )
+                    elif outcome == "ip_blocked":
+                        await profile_db.set_profile_status(db_path, profile.id, "pending")
+                        await app.bot.send_message(
+                            chat_id=user_id,
+                            text=f"⚠️ *IP Blocked during Phase 2* for {profile.name or masked}. Resetting to pending.",
+                            parse_mode="Markdown",
+                        )
+                    elif outcome == "captcha_fail":
+                        # Queue manual CAPTCHA for user
+                        await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)
+                    else:
+                        await profile_db.set_profile_status(db_path, profile.id, "failed")
+                        await app.bot.send_message(
+                            chat_id=user_id,
+                            text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
+                            parse_mode="Markdown",
+                        )
+    except Forbidden:
+        logger.warning("Bot was blocked by user_id=%s. Deleting all data.", user_id)
+        await db_mod.delete_user_data(db_path, user_id)
+    except Exception:
+        logger.exception("Failed to process profiles for user %s", user_id)
 
 
 async def _send_manual_captcha(
