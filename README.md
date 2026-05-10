@@ -26,8 +26,15 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Modernized PTB Compatibility**: Fully optimized for `python-telegram-bot` v20/v21. Includes resolved `ChatMemberStatus` imports and a specialized warning suppression engine in `bot/main.py` to keep the console output clean and focused on critical events.
 - **Robust Error Resilience**: Implemented a global exception handler that intelligently filters out harmless Telegram API errors (like "Message is not modified" from double-clicks) and gracefully handles blocked-bot scenarios. This ensures maximum uptime and a clean, high-signal log stream for production monitoring.
 - **Admin Error & Warning Inbox**: A centralized, persistent monitoring system that intercepts all `ERROR` and `WARNING` log events. Features real-time Telegram notifications for admins, a filterable paginated dashboard (by level, status, and date range), and a resolution tracking system to manage system health.
-- **Database Maintenance & Quality Gate**: A proactive admin tool that scans the entire database for data integrity issues. Features both a **Standard Mode** (with user notifications) and a **Silent Mode** (audit-only). Automatically marks non-conforming profiles as `is_valid=0`, ensuring they are strictly excluded from auto-registration batches until corrected by the user.
-- **Strict Server-Sync Validation**: Implements strict 8-16 character password validation (specifically excluding dots) and restricted symbol sets that are directly synchronized with the `adhahi.dz` server requirements, preventing avoidable registration failures.
+- **Advanced Admin Audit Suite**: Includes a comprehensive set of maintenance tools:
+  - **Mass Force Check**: Scans the entire database for data integrity issues with both **Standard** (notifies users) and **Silent** (audit-only) modes.
+  - **Profile Inspector**: Allows admins to look up full details and real-time validation errors for any profile using its unique ID.
+  - **Blocker Purge**: A manual cleanup tool that identifies and removes all data for users who have blocked the bot.
+- **Strict Compliance Gate**: Implements a unified validation engine across all flows (Add, Edit, Audit). Any profile failing server standards (NIN, CNIBE, Phone, or Password complexity) is automatically marked as `is_valid=0` and strictly excluded from auto-registration batches until corrected by the user.
+- **Strict Server-Sync Validation**: Implements exact `adhahi.dz` requirements to prevent avoidable registration failures:
+  - **Password**: 8-16 characters, mandatory complexity (Upper/Lower/Digit/Symbol), and **explicitly forbids dots (`.`)**.
+  - **Identifiers**: Exactly 18-digit NIN and 9-digit CNIBE.
+  - **Contact**: Exactly 10-digit Phone starting with `0`.
 
 ### Prerequisites
 - Docker + Docker Compose
@@ -89,8 +96,8 @@ Most interaction is now handled via the built-in menus, but commands are still a
 - `/testcaptchasolvers`: Test both CAPTCHA solvers side-by-side
 
 **Admin Commands**
-- `/checkprofile`: (Admin Only) Check if a profile NIN is registered on server
-- `/adminammar`: Open the hidden admin dashboard
+- `/adminammar`: Open the hidden admin dashboard (Force Check, Purge, Inbox, Stats)
+- `/checkprofile`: (Admin Only) Quick check if a profile NIN is registered on server
 
 ### Adapting to a different quota API
 All API shape assumptions are centralized in `bot/api_client.py`:
