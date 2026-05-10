@@ -1128,10 +1128,12 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     db_path: str = context.application.bot_data.get("db_path", "")
+    logger.info("Admin %s initiated force check scan", update.effective_user.id)
     await query.edit_message_text("⏳ Scanning all profiles in database...")
 
     try:
         user_profiles = await profile_db.get_all_profiles_grouped_by_user(db_path)
+        logger.info("Found %d users with profiles to check", len(user_profiles))
     except Exception as e:
         logger.exception("Failed to get profiles for check")
         await query.edit_message_text(f"❌ Database error: {e}")
@@ -1207,6 +1209,8 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as e:
                 logger.warning("Could not notify user %s: %s", user_id, e)
 
+    logger.info("Force check complete: %d checked, %d fixed, %d invalid, %d notified", 
+                checked_count, fixed_emails, invalid_others, notifications_sent)
     await query.edit_message_text(
         "✅ *Database Check Complete*\n\n"
         f"Profiles checked: `{checked_count}`\n"
