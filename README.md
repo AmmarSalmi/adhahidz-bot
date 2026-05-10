@@ -9,7 +9,7 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Notifications**: Alerts subscribed users when quota becomes available in their chosen Wilaya.
 - **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open. Now features **Seniority-Based Priority**, **Global Concurrency Throttling**, and **Aggressive Mode** (continuous scanning of open Wilayas to ensure no profile is missed, even if added after the Wilaya opened).
 - **Intelligent Nudging**: When Wilayas are open, the bot aggressively nudges users with `pre-registered` profiles to verify their OTP, featuring a built-in **1-hour cooldown** to balance urgency with user experience.
-- **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
+- **CAPTCHA Solving**: Optimized hybrid strategy featuring rapid local OCR (`ddddocr`) with **5 retry attempts** and humanizing jitter (0.5s-1.0s) to minimize solve latency during tight windows, falling back to third-party API (`2captcha`) only as a final resort.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
 - **Profile Usage Limits**: Enforces a fair-usage limit of 3 registration profiles per user to ensure system stability and performance.
 - **Quota History & Analysis**: Automatically records every "OPEN" and "CLOSE" event for all Wilayas in the database. This data allows for analyzing quota patterns, measuring window durations, and understanding the frequency of availability changes. Recent history is visible directly in the admin stats panel.
@@ -60,7 +60,7 @@ cp .env.example .env
 
 Optional tuning:
 - `CHECK_INTERVAL_SECONDS`: how often to poll the API (default `300`)
-- `TWO_CAPTCHA_API_KEY`: API key for 2Captcha service (optional, falls back to local `ddddocr` if not provided)
+- `TWO_CAPTCHA_API_KEY`: API key for 2Captcha service (optional, used as a prioritized fallback after 5 failed local `ddddocr` attempts)
 - `MAX_CONCURRENT_SESSIONS`: global limit of simultaneous registration/login connections (default `50`)
 - `PROXY_WILAYA`: enable proxy for background quota checks (default `false`)
 - `PROXY_AUTOREG`: enable proxy for auto-registration flow (default `false`)
