@@ -1203,14 +1203,14 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                 
                 if user_invalid_fields:
                     msg_parts.append(
-                        "We also found **major errors** in the following profiles that require your **manual correction**:\n"
+                        "We also found **major errors** in the following profiles. These profiles **have been excluded** from "
+                        "auto-registration batches until they are corrected:\n"
                     )
                     for prof_name, field in user_invalid_fields:
                         msg_parts.append(f"  • Profile *{prof_name}*: Invalid **{field}**")
                     
                     msg_parts.append(
-                        "\n⚠️ *Crucial:* Profiles with invalid NIN, CNIBE, or Password **will fail** when the wilaya opens. "
-                        "Please use /profiles to edit and fix them immediately."
+                        "\n⚠️ *Action Required:* Please use /profiles to edit and fix them immediately to re-enable them for the next quota window."
                     )
 
                 try:

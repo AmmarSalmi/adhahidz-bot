@@ -336,6 +336,7 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Use /profiles to view all your profiles.",
         parse_mode="Markdown",
     )
+    await _revalidate_and_warn(update, context, profile_id)
     return ConversationHandler.END
 
 
@@ -677,6 +678,7 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     context.user_data.pop("edit_field", None)
 
     await update.message.reply_text(f"✅ Profile #{profile_id} *{field}* updated.", parse_mode="Markdown")
+    await _revalidate_and_warn(update, context, profile_id)
     return ConversationHandler.END
 
 
@@ -714,6 +716,7 @@ async def on_edit_payment_method(update: Update, context: ContextTypes.DEFAULT_T
         f"✅ Profile #{profile_id} payment method updated to *{label}*.",
         parse_mode="Markdown",
     )
+    await _revalidate_and_warn(update, context, profile_id)
     return ConversationHandler.END
 
 
@@ -749,9 +752,10 @@ async def on_edit_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.pop("edit_field", None)
 
     await query.edit_message_text(
-        f"✅ Profile #{profile_id} status updated to *{status}*.",
+        f"✅ Profile #{profile_id} status updated to *{status.capitalize()}*.",
         parse_mode="Markdown",
     )
+    await _revalidate_and_warn(update, context, profile_id)
     return ConversationHandler.END
 
 
@@ -870,3 +874,55 @@ def build_reorder_handler() -> ConversationHandler:
         per_chat=True,
         per_message=False,
     )
+
+
+async def _revalidate_and_warn(update: Update, context: ContextTypes.DEFAULT_TYPE, profile_id: int):
+    """Re-check profile validity after an edit and notify the user if it's still invalid."""
+    db_path = context.application.bot_data.get("db_path", "")
+    user_id = update.effective_user.id
+    
+    # Reload profile to get current state
+    profile = await profile_db.get_profile(db_path, profile_id, user_id)
+    if not profile:
+        return
+
+    # Validation logic (sync with admin.py and registration.py)
+    is_valid_email = _validate_email(profile.email)
+    other_errors = []
+    if not profile.nin.isdigit() or len(profile.nin) != 18:
+        other_errors.append("NIN")
+    if not profile.cnibe.isdigit() or len(profile.cnibe) != 9:
+        other_errors.append("CNIBE")
+    if not profile.phone.isdigit() or len(profile.phone) != 10 or not profile.phone.startswith("0"):
+        other_errors.append("Phone")
+    
+    pw_errs = _validate_password(profile.password)
+    if pw_errs:
+        other_errors.append("Password")
+
+    conforms = (is_valid_email and not other_errors)
+    new_is_valid = 1 if conforms else 0
+    
+    # Update DB if status changed
+    if profile.is_valid != new_is_valid:
+        try:
+            await profile_db.update_profile_field(db_path, profile.id, user_id, "is_valid", new_is_valid)
+        except Exception:
+            logger.exception("Failed to update is_valid during re-validation")
+
+    if not conforms:
+        msg = (
+            "⚠️ *Warning: Profile still invalid*\n\n"
+            "This profile is currently **excluded from auto-registration** because it still contains errors:\n"
+        )
+        if not is_valid_email and profile.email:
+            msg += "  • Invalid Email format\n"
+        for err in other_errors:
+            msg += f"  • Invalid {err}\n"
+        
+        msg += "\nPlease fix these errors in /profiles to re-enable auto-registration for this profile."
+        
+        if update.callback_query:
+            await update.callback_query.message.reply_text(msg, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(msg, parse_mode="Markdown")
