@@ -329,6 +329,11 @@ async def _try_login_and_order(
     if "quota" in error_msg.lower() and "active" in error_msg.lower():
         return profile, "quota_closed", error_msg
 
+    # Recognize existing orders to avoid infinite failure loops
+    if any(term in error_msg.lower() for term in ["already have an active order", "commande en cours"]):
+        logger.info("Profile %s already has an active order on server.", profile.id)
+        return profile, "already_ordered", error_msg
+
     return profile, "order_fail", error_msg
 
 
@@ -570,14 +575,20 @@ async def _process_registered_profiles(
             profile, outcome, detail = result
             masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
 
-            if outcome == "ordered":
+            if outcome == "ordered" or outcome == "already_ordered":
                 await profile_db.set_profile_status(db_path, profile.id, "ordered")
                 lang = await get_user_language(db_path, user_id)
+                
+                if outcome == "ordered":
+                    text = t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour order has been submitted successfully!")
+                else:
+                    text = t(lang, "🐑 *Order already active!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nI detected that this profile already has an active order. Status updated successfully.")
+                
                 await safe_send_message(
                     app.bot,
                     user_id=user_id,
                     db_path=db_path,
-                    text=t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour order has been submitted successfully!").format(name=profile.name or masked, phone=profile.phone),
+                    text=text.format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
             elif outcome == "order_fail":
@@ -690,14 +701,20 @@ async def _process_user_profiles(
                         l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
                 
                 masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-                if l_outcome == "ordered":
+                if l_outcome == "ordered" or l_outcome == "already_ordered":
                     await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
                     lang = await get_user_language(db_path, user_id)
+                    
+                    if l_outcome == "ordered":
+                        text = t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nAccount was already active; order was submitted successfully!")
+                    else:
+                        text = t(lang, "🐑 *Order already active!*\n\nProfile: *{name}*\nAccount was already active and an order was already found on server! Status updated.")
+                        
                     await safe_send_message(
                         app.bot,
                         user_id=user_id,
                         db_path=db_path,
-                        text=t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nAccount was already active; order was submitted successfully!").format(name=l_profile.name or masked),
+                        text=text.format(name=l_profile.name or masked),
                         parse_mode="Markdown",
                     )
                 else:
