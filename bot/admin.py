@@ -19,7 +19,9 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+import re
 import aiosqlite
+from .i18n import t
 from deep_translator import GoogleTranslator
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, constants
 from telegram.ext import (
@@ -261,6 +263,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🌐 Proxy Settings ⚙️", callback_data="admin:proxy_submenu")],
             [InlineKeyboardButton("⚙️ Set Concurrency Limit", callback_data="admin:set_concurrency")],
             [InlineKeyboardButton("🧹 Purge Blocking Users", callback_data="admin:purge_blockers")],
+            [InlineKeyboardButton("📢 Notify Invalid NINs", callback_data="admin:notify_invalid_nins")],
             [InlineKeyboardButton("📥 Error/Warning Inbox", callback_data="admin:inbox:0")],
             [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
         ]
@@ -1444,3 +1447,114 @@ async def _run_purge_task(app, admin_id: int, db_path: str) -> None:
         await app.bot.send_message(chat_id=admin_id, text=report, parse_mode="Markdown")
     except Exception:
         logger.exception("Failed to send purge report to admin")
+
+
+async def on_admin_notify_invalid_nins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual trigger to scan admin_inbox for MICLAT NOT FOUND errors and notify users."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    db_path = context.application.bot_data.get("db_path")
+    if not db_path:
+        await query.edit_message_text("❌ Database path not configured.")
+        return
+
+    # Run the notification task in background
+    asyncio.create_task(_run_notify_invalid_nins_task(context.application, update.effective_user.id, db_path))
+    
+    await query.edit_message_text(
+        "📢 *Notification Task Started*\n\n"
+        "I'm scanning the Error Inbox for 'MICLAT NOT FOUND' rejections. "
+        "Affected users will be notified to check their NINs for typos.\n\n"
+        "You will receive a summary report once finished.",
+        parse_mode="Markdown"
+    )
+
+
+async def _run_notify_invalid_nins_task(app, admin_id: int, db_path: str) -> None:
+    """Background task to extract invalid NINs from logs and notify owners."""
+    logger.info("Starting batch notification for invalid NINs...")
+    
+    try:
+        # 1. Fetch unresolved MICLAT NOT FOUND entries
+        async with aiosqlite.connect(db_path) as db:
+            query = "SELECT id, message FROM admin_inbox WHERE message LIKE '%MICLAT NOT FOUND%' AND status = 'unresolved'"
+            async with db.execute(query) as cur:
+                entries = await cur.fetchall()
+    except Exception as e:
+        logger.exception("Failed to fetch inbox entries for notification")
+        await app.bot.send_message(chat_id=admin_id, text=f"❌ *Task Failed*\nCould not retrieve log entries: `{e}`", parse_mode="Markdown")
+        return
+
+    if not entries:
+        await app.bot.send_message(chat_id=admin_id, text="ℹ️ *No pending invalid NINs found* in the inbox.", parse_mode="Markdown")
+        return
+
+    total = len(entries)
+    notified = 0
+    failed = 0
+    
+    # Regex to extract profile_id and nin
+    # Format: "Profile 478 rejected by server (not CAPTCHA): MICLAT NOT FOUND | nin=119850681001600002"
+    pattern = re.compile(r"Profile (\d+) rejected by server .* nin=(\d+)")
+
+    for entry_id, message in entries:
+        match = pattern.search(message)
+        if not match:
+            # Mark as resolved anyway if we can't parse it (or skip)
+            await db_mod.resolve_inbox_entry(db_path, entry_id)
+            continue
+            
+        profile_id = int(match.group(1))
+        nin = match.group(2)
+        
+        try:
+            # 2. Get profile and owner
+            profile = await profile_db.get_profile_by_id_admin(db_path, profile_id)
+            if not profile:
+                await db_mod.resolve_inbox_entry(db_path, entry_id)
+                continue
+            
+            user_id = profile.user_id
+            
+            # 3. Notify user
+            lang = await db_mod.get_user_language(db_path, user_id)
+            text = t(lang, "⚠️ *Invalid NIN Detected*\n\nYour profile *{name}* was rejected by the server because the NIN `{nin}` does not exist in the Ministry of Interior's database (MICLAT).\n\nPlease check for typos and edit your profile using the /profiles menu.").format(name=profile.name or f"ID {profile.id}", nin=nin)
+            
+            try:
+                await app.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+                notified += 1
+                # 4. Mark inbox entry as resolved
+                await db_mod.resolve_inbox_entry(db_path, entry_id)
+            except Forbidden:
+                # User blocked bot, resolve entry anyway
+                await db_mod.resolve_inbox_entry(db_path, entry_id)
+            except Exception:
+                failed += 1
+                logger.exception("Failed to notify user %s about invalid NIN", user_id)
+
+        except Exception:
+            failed += 1
+            logger.exception("Error processing entry %d", entry_id)
+        
+        await asyncio.sleep(0.1) # Throttling
+
+    report = (
+        "📢 *NIN Notification Complete*\n\n"
+        f"Entries processed: *{total}*\n"
+        f"Users notified: *{notified}*\n"
+        f"Failures: *{failed}*"
+    )
+    
+    logger.info("NIN notification complete: %d processed, %d notified", total, notified)
+    
+    try:
+        await app.bot.send_message(chat_id=admin_id, text=report, parse_mode="Markdown")
+    except Exception:
+        logger.exception("Failed to send report to admin")

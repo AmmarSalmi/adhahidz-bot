@@ -80,6 +80,7 @@ _TRANSLATIONS = {
         "📬 subscription": "📬 إشعار اشتراك",
         "🤖 auto-reg": "🤖 تسجيل تلقائي",
         "You will be notified when quota is available in {wilaya_name}.": "سيتم إشعارك عندما تتوفر الحصة في {wilaya_name}.",
+        "⚠️ *Invalid NIN Detected*\n\nYour profile *{name}* was rejected by the server because the NIN `{nin}` does not exist in the Ministry of Interior's database (MICLAT).\n\nPlease check for typos and edit your profile using the /profiles menu.": "⚠️ *رقم تعريف وطني غير صالح*\n\nتم رفض ملفك الشخصي *{name}* من قبل الخادم لأن رقم التعريف الوطني `{nin}` غير موجود في قاعدة بيانات وزارة الداخلية.\n\nيرجى التأكد من عدم وجود أخطاء مطبعية وتعديل ملفك الشخصي عبر قائمة /profiles.",
     },
     "fr": {
         "Welcome! I couldn't load the Wilaya list yet (API unavailable). Send /change later to try again.": "Bienvenue ! Je n'ai pas pu charger la liste des Wilayas. Envoyez /change plus tard.",
@@ -142,6 +143,7 @@ _TRANSLATIONS = {
         "📬 subscription": "📬 abonnement",
         "🤖 auto-reg": "🤖 auto-reg",
         "You will be notified when quota is available in {wilaya_name}.": "Vous serez notifié lorsque le quota sera disponible à {wilaya_name}.",
+        "⚠️ *Invalid NIN Detected*\n\nYour profile *{name}* was rejected by the server because the NIN `{nin}` does not exist in the Ministry of Interior's database (MICLAT).\n\nPlease check for typos and edit your profile using the /profiles menu.": "⚠️ *NIN Invalide Détecté*\n\nVotre profil *{name}* a été rejeté par le serveur car le NIN `{nin}` n'existe pas dans la base de données du Ministère de l'Intérieur (MICLAT).\n\nVeuillez vérifier les fautes de frappe et modifier votre profil via le menu /profiles.",
     }
 }
 

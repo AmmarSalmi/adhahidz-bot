@@ -18,7 +18,8 @@ from .admin import (
     on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy, 
     on_admin_proxy_submenu, on_admin_inbox, on_admin_inbox_view, 
     on_admin_inbox_resolve, on_admin_inbox_filter_level, on_admin_inbox_filter_status,
-    on_admin_inbox_filter_date, on_admin_force_check, on_admin_purge_blockers
+    on_admin_inbox_filter_date, on_admin_force_check, on_admin_purge_blockers,
+    on_admin_notify_invalid_nins
 )
 
 from .api_client import QuotaApiClient
@@ -278,6 +279,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_level, pattern=r"^admin:inbox_filter_level:"))
     app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_status, pattern=r"^admin:inbox_filter_status:"))
     app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_date, pattern=r"^admin:inbox_filter_date:"))
+    app.add_handler(CallbackQueryHandler(on_admin_notify_invalid_nins, pattern=r"^admin:notify_invalid_nins$"))
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))

@@ -692,9 +692,16 @@ async def _process_user_profiles(
             else:
                 await profile_db.set_profile_status(db_path, profile.id, "failed")
                 lang = await get_user_language(db_path, user_id)
+                
+                # Real-time MICLAT NOT FOUND notification
+                if "MICLAT NOT FOUND" in detail:
+                    text = t(lang, "⚠️ *Invalid NIN Detected*\n\nYour profile *{name}* was rejected by the server because the NIN `{nin}` does not exist in the Ministry of Interior's database (MICLAT).\n\nPlease check for typos and edit your profile using the /profiles menu.").format(name=profile.name or f"ID {profile.id}", nin=profile.nin)
+                else:
+                    text = t(lang, "❌ Registration failed for profile *{name}*:\n{detail}").format(name=profile.name, detail=detail)
+                
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=t(lang, "❌ Registration failed for profile *{name}*:\n{detail}").format(name=profile.name, detail=detail),
+                    text=text,
                     parse_mode="Markdown",
                 )
 
@@ -773,9 +780,16 @@ async def _process_user_profiles(
                     else:
                         await profile_db.set_profile_status(db_path, profile.id, "failed")
                         lang = await get_user_language(db_path, user_id)
+                        
+                        # Real-time MICLAT NOT FOUND notification
+                        if "MICLAT NOT FOUND" in detail:
+                            text = t(lang, "⚠️ *Invalid NIN Detected*\n\nYour profile *{name}* was rejected by the server because the NIN `{nin}` does not exist in the Ministry of Interior's database (MICLAT).\n\nPlease check for typos and edit your profile using the /profiles menu.").format(name=profile.name or f"ID {profile.id}", nin=profile.nin)
+                        else:
+                            text = t(lang, "❌ Registration failed for profile *{name}*:\n{detail}").format(name=profile.name, detail=detail)
+                        
                         await app.bot.send_message(
                             chat_id=user_id,
-                            text=t(lang, "❌ Registration failed for profile *{name}*:\n{detail}").format(name=profile.name, detail=detail),
+                            text=text,
                             parse_mode="Markdown",
                         )
     except Forbidden:
