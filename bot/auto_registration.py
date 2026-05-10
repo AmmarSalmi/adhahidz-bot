@@ -504,7 +504,7 @@ async def _nudge_preregistered_profiles(
                 lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nAn OTP has been resent to your phone.\nUse /verifyotp *immediately* to complete verification and place your order before quota runs out!").format(name=profile.name or masked, phone=profile.phone),
+                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nAn OTP has been resent to your phone.\nPlease use the official website *immediately* to verify and complete your order:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
                 nudge_history[profile.id] = now
@@ -512,7 +512,7 @@ async def _nudge_preregistered_profiles(
                 lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\n⚠️ Failed to resend OTP. Try /verifyotp and type `resend` to request a new OTP manually.").format(name=profile.name or masked, phone=profile.phone),
+                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\n⚠️ Failed to resend OTP. Please try verifying via the official website:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
         except Forbidden:
@@ -644,7 +644,7 @@ async def _process_user_profiles(
                 lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour spot is secured! Use /verifyotp to complete OTP verification when ready.").format(name=profile.name or masked, phone=profile.phone),
+                    text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
             elif outcome == "already_registered":
@@ -731,7 +731,7 @@ async def _process_user_profiles(
                                 f"✅ *Registration submitted!*\n\n"
                                 f"Profile: *{profile.name or masked}*\n"
                                 f"Phone: `{profile.phone}`\n\n"
-                                "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
+                                "Your spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation"
                             ),
                             parse_mode="Markdown",
                         )
@@ -932,7 +932,7 @@ async def manual_captcha_reply_handler(update: Update, context: ContextTypes.DEF
         await profile_db.set_profile_status(db_path, profile.id, "submitted")
         await update.message.reply_text(
             f"✅ *Registration submitted for {profile.name}!*\n\n"
-            "Your spot is secured! Use /verifyotp when ready.",
+            "Your spot is secured! Use the official website to verify when ready:\n🔗 https://adhahi.dz/activation",
             parse_mode="Markdown",
         )
     else:
@@ -1080,41 +1080,16 @@ async def _complete_post_otp_flow(
 # ─── /verifyotp command ───────────────────────────────────────────────────────
 
 async def verifyotp_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """List submitted profiles and let user pick one to verify OTP."""
-    user_id = update.effective_user.id
+    """Inform user that OTP verification via bot is disabled."""
     db_path: str = context.application.bot_data["db_path"]
-
-    submitted = await profile_db.get_profiles_by_status(db_path, user_id, "submitted")
-    pre_registered = await profile_db.get_profiles_by_status(db_path, user_id, "pre-registered")
-    submitted = submitted + pre_registered
-    if not submitted:
-        await update.effective_message.reply_text("No profiles awaiting OTP verification.")
-        return ConversationHandler.END
-
-    if len(submitted) == 1:
-        # Jump straight to OTP prompt
-        context.user_data["verify_otp"] = {"profile": submitted[0]}
-        masked = f"{submitted[0].nin[:4]}…{submitted[0].nin[-4:]}"
-        await update.effective_message.reply_text(
-            f"📱 *OTP Verification*\n\n"
-            f"Profile: *{submitted[0].name or masked}*\n"
-            f"Phone: `{submitted[0].phone}`\n\n"
-            "Enter the OTP you received.\n"
-            "If your OTP expired, type `resend` to get a new one.",
-            parse_mode="Markdown",
-        )
-        return VERIFY_OTP_CAPTCHA
-
-    # Multiple — list them
-    lines = ["📱 *OTP Verification*\n\nMultiple profiles awaiting verification:\n"]
-    for p in submitted:
-        masked = f"{p.nin[:4]}…{p.nin[-4:]}"
-        lines.append(f"  `{p.id}` — *{p.name or masked}* ({p.phone})")
-    lines.append("\nReply with the profile ID number:")
-    await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-    context.user_data["verify_otp"] = {"profiles": submitted}
-    return VERIFY_OTP_CAPTCHA
+    lang = await get_user_language(db_path, update.effective_user.id)
+    
+    await update.effective_message.reply_text(
+        t(lang, "⚠️ *OTP verification via bot is currently disabled.* \n\nPlease use the official website to verify your OTP and complete your registration:\n\n🔗 https://adhahi.dz/activation"),
+        parse_mode="Markdown",
+        disable_web_page_preview=False
+    )
+    return ConversationHandler.END
 
 
 async def verifyotp_handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
