@@ -1131,92 +1131,106 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info("Admin %s initiated force check scan", update.effective_user.id)
     await query.edit_message_text("⏳ Scanning all profiles in database...")
 
-    try:
-        user_profiles = await profile_db.get_all_profiles_grouped_by_user(db_path)
-        logger.info("Found %d users with profiles to check", len(user_profiles))
-    except Exception as e:
-        logger.exception("Failed to get profiles for check")
-        await query.edit_message_text(f"❌ Database error: {e}")
-        return
-
     checked_count = 0
     fixed_emails = 0
     invalid_others = 0
     notifications_sent = 0
-    
-    # We'll group notifications by user to avoid spamming
-    for user_id, profiles in user_profiles.items():
-        user_fixed_count = 0
-        user_invalid_fields = [] # [(profile_name, field)]
+
+    try:
+        user_profiles = await profile_db.get_all_profiles_grouped_by_user(db_path)
+        logger.info("Found %d users with profiles to check", len(user_profiles))
         
-        for p in profiles:
-            checked_count += 1
-            is_valid_email = _validate_email(p.email)
+        # We'll group notifications by user to avoid spamming
+        for user_id, profiles in user_profiles.items():
+            user_fixed_count = 0
+            user_invalid_fields = [] # [(profile_name, field)]
             
-            # Check other fields too
-            other_errors = []
-            if not p.nin.isdigit() or len(p.nin) != 18:
-                other_errors.append("NIN")
-            if not p.cnibe.isdigit() or len(p.cnibe) != 9:
-                other_errors.append("CNIBE")
-            if not p.phone.isdigit() or len(p.phone) != 10 or not p.phone.startswith("0"):
-                other_errors.append("Phone")
-            
-            pw_errs = _validate_password(p.password)
-            if pw_errs:
-                other_errors.append("Password")
-            
-            if other_errors:
-                invalid_others += 1
-                for field in other_errors:
-                    user_invalid_fields.append((p.name or f"#{p.id}", field))
-
-            if not is_valid_email:
-                # Fix it!
-                try:
-                    await profile_db.update_profile_field(db_path, p.id, user_id, "email", "")
-                    fixed_emails += 1
-                    user_fixed_count += 1
-                except Exception:
-                    logger.exception("Failed to fix email for profile %s", p.id)
-
-        # Notify user if we fixed something or found errors
-        if user_fixed_count > 0 or user_invalid_fields:
-            msg_parts = ["⚠️ *Profile Maintenance Notification*\n"]
-            
-            if user_fixed_count > 0:
-                msg_parts.append(
-                    f"Our routine check detected an **invalid email format** in {user_fixed_count} profile(s). "
-                    "We have automatically cleared those emails to ensure your profiles remain compatible.\n"
-                )
-            
-            if user_invalid_fields:
-                msg_parts.append(
-                    "We also found **major errors** in the following profiles that require your **manual correction**:\n"
-                )
-                for prof_name, field in user_invalid_fields:
-                    msg_parts.append(f"  • Profile *{prof_name}*: Invalid **{field}**")
+            for p in profiles:
+                checked_count += 1
+                is_valid_email = _validate_email(p.email)
                 
-                msg_parts.append(
-                    "\n⚠️ *Crucial:* Profiles with invalid NIN, CNIBE, or Password **will fail** when the wilaya opens. "
-                    "Please use /profiles to edit and fix them immediately."
-                )
+                # Check other fields too
+                other_errors = []
+                if not p.nin.isdigit() or len(p.nin) != 18:
+                    other_errors.append("NIN")
+                if not p.cnibe.isdigit() or len(p.cnibe) != 9:
+                    other_errors.append("CNIBE")
+                if not p.phone.isdigit() or len(p.phone) != 10 or not p.phone.startswith("0"):
+                    other_errors.append("Phone")
+                
+                pw_errs = _validate_password(p.password)
+                if pw_errs:
+                    other_errors.append("Password")
+                
+                if other_errors:
+                    invalid_others += 1
+                    for field in other_errors:
+                        user_invalid_fields.append((p.name or f"#{p.id}", field))
 
-            try:
-                await context.bot.send_message(chat_id=user_id, text="\n".join(msg_parts), parse_mode="Markdown")
-                notifications_sent += 1
-                await asyncio.sleep(0.05) 
-            except Exception as e:
-                logger.warning("Could not notify user %s: %s", user_id, e)
+                if not is_valid_email:
+                    # Fix it!
+                    try:
+                        await profile_db.update_profile_field(db_path, p.id, user_id, "email", "")
+                        fixed_emails += 1
+                        user_fixed_count += 1
+                    except Exception:
+                        logger.exception("Failed to fix email for profile %s", p.id)
 
-    logger.info("Force check complete: %d checked, %d fixed, %d invalid, %d notified", 
-                checked_count, fixed_emails, invalid_others, notifications_sent)
-    await query.edit_message_text(
-        "✅ *Database Check Complete*\n\n"
-        f"Profiles checked: `{checked_count}`\n"
-        f"Invalid emails fixed: `{fixed_emails}`\n"
-        f"Other invalid fields detected: `{invalid_others}` (NIN/CNIBE/PW)\n"
-        f"User notifications sent: `{notifications_sent}`",
-        reply_markup=_admin_keyboard(context),
-        parse_mode="Markdown"
-    )
+            # Notify user if we fixed something or found errors
+            if user_fixed_count > 0 or user_invalid_fields:
+                msg_parts = ["⚠️ *Profile Maintenance Notification*\n"]
+                
+                if user_fixed_count > 0:
+                    msg_parts.append(
+                        f"Our routine check detected an **invalid email format** in {user_fixed_count} profile(s). "
+                        "We have automatically cleared those emails to ensure your profiles remain compatible.\n"
+                    )
+                
+                if user_invalid_fields:
+                    msg_parts.append(
+                        "We also found **major errors** in the following profiles that require your **manual correction**:\n"
+                    )
+                    for prof_name, field in user_invalid_fields:
+                        msg_parts.append(f"  • Profile *{prof_name}*: Invalid **{field}**")
+                    
+                    msg_parts.append(
+                        "\n⚠️ *Crucial:* Profiles with invalid NIN, CNIBE, or Password **will fail** when the wilaya opens. "
+                        "Please use /profiles to edit and fix them immediately."
+                    )
+
+                try:
+                    await context.bot.send_message(chat_id=user_id, text="\n".join(msg_parts), parse_mode="Markdown")
+                    notifications_sent += 1
+                    await asyncio.sleep(0.05) 
+                except Exception as e:
+                    logger.warning("Could not notify user %s: %s", user_id, e)
+
+        summary_text = (
+            "✅ *Database Check Complete*\n\n"
+            f"Profiles checked: `{checked_count}`\n"
+            f"Invalid emails fixed: `{fixed_emails}`\n"
+            f"Other invalid fields detected: `{invalid_others}` (NIN/CNIBE/PW)\n"
+            f"User notifications sent: `{notifications_sent}`"
+        )
+        
+        logger.info("Force check complete: %d checked, %d fixed, %d invalid, %d notified", 
+                    checked_count, fixed_emails, invalid_others, notifications_sent)
+
+        # Try to edit the original message, but if it fails (e.g. timeout), send a new one
+        try:
+            await query.edit_message_text(summary_text, reply_markup=_admin_keyboard(context), parse_mode="Markdown")
+        except Exception:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id, 
+                text=summary_text, 
+                reply_markup=_admin_keyboard(context), 
+                parse_mode="Markdown"
+            )
+
+    except Exception as e:
+        logger.exception("Force check failed")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text=f"❌ *Force Check Failed*\n\nError: `{e}`", 
+            parse_mode="Markdown"
+        )
