@@ -178,7 +178,20 @@ async def on_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "*Profile breakdown by status:*",
     ]
     for status_name, count in stats["profiles_by_status"]:
-        lines.append(f"  • `{status_name}`: {count}")
+        lines.append(f"  • {status_name.capitalize()}: *{count}*")
+    
+    lines.append("")
+    lines.append("*Compliance Gate Statistics:*")
+    valid_count = 0
+    invalid_count = 0
+    for is_valid, count in stats["profiles_by_validity"]:
+        if is_valid == 1:
+            valid_count = count
+        else:
+            invalid_count = count
+    
+    lines.append(f"  • ✅ Valid (Included): *{valid_count}*")
+    lines.append(f"  • ❌ Invalid (Excluded): *{invalid_count}*")
 
     lines.append("")
     lines.append(f"🕐 Subscriptions today: *{stats['subs_today']}*")
@@ -879,6 +892,12 @@ async def _gather_stats(db_path: str) -> dict:
         ) as cur:
             profiles_by_status = [(str(r[0]), int(r[1])) for r in await cur.fetchall()]
 
+        # Profiles by validity
+        async with db.execute(
+            "SELECT is_valid, COUNT(*) FROM profiles GROUP BY is_valid ORDER BY is_valid DESC"
+        ) as cur:
+            profiles_by_validity = [(int(r[0]), int(r[1])) for r in await cur.fetchall()]
+
         # Profiles created today
         async with db.execute(
             "SELECT COUNT(*) FROM profiles WHERE created_at >= ?",
@@ -905,6 +924,7 @@ async def _gather_stats(db_path: str) -> dict:
         "subs_week": subs_week,
         "total_profiles": total_profiles,
         "profiles_by_status": profiles_by_status,
+        "profiles_by_validity": profiles_by_validity,
         "profiles_today": profiles_today,
         "profiles_week": profiles_week,
         "recent_history": recent_history,
