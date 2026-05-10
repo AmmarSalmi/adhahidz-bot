@@ -29,6 +29,8 @@ from telegram.ext import (
 )
 
 from . import profile_db
+from .i18n import t
+from .db import get_user_language
 from .captcha_solver import CaptchaSolver, create_solvers
 from .proxy import get_proxy_url
 from .registration import (
@@ -353,9 +355,15 @@ async def remind_preregistered_profiles(app) -> None:
             "to snatch an order when quota opens!"
         )
         try:
+            lang = await get_user_language(db_path, user_id)
+            translated_lines = [t(lang, "🔔 *OTP Verification Reminder*\n")]
+            for p in profs:
+                masked = f"{p.nin[:4]}…{p.nin[-4:]}"
+                translated_lines.append(f"  • *{p.name or masked}* (`{p.phone}`)")
+            translated_lines.append(t(lang, "\nThese profiles are pre-registered but not yet verified.\nUse /verifyotp to complete verification so they're ready to snatch an order when quota opens!"))
             await app.bot.send_message(
                 chat_id=user_id,
-                text="\n".join(lines),
+                text="\n".join(translated_lines),
                 parse_mode="Markdown",
             )
             logger.info("Sent pre-registered reminder to user %s (%d profiles)", user_id, len(profs))
@@ -493,29 +501,18 @@ async def _nudge_preregistered_profiles(
         # Notify user urgently — don't wait for response
         try:
             if otp_sent:
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"🚨 *QUOTA IS OPEN — Verify NOW!*\n\n"
-                        f"Profile: *{profile.name or masked}*\n"
-                        f"Phone: `{profile.phone}`\n\n"
-                        "An OTP has been resent to your phone.\n"
-                        "Use /verifyotp *immediately* to complete verification "
-                        "and place your order before quota runs out!"
-                    ),
+                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nAn OTP has been resent to your phone.\nUse /verifyotp *immediately* to complete verification and place your order before quota runs out!").format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
                 nudge_history[profile.id] = now
             else:
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"🚨 *QUOTA IS OPEN — Verify NOW!*\n\n"
-                        f"Profile: *{profile.name or masked}*\n"
-                        f"Phone: `{profile.phone}`\n\n"
-                        "⚠️ Failed to resend OTP. Try /verifyotp and type `resend` "
-                        "to request a new OTP manually."
-                    ),
+                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\n⚠️ Failed to resend OTP. Try /verifyotp and type `resend` to request a new OTP manually.").format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
         except Forbidden:
@@ -564,46 +561,37 @@ async def _process_registered_profiles(
 
             if outcome == "ordered":
                 await profile_db.set_profile_status(db_path, profile.id, "ordered")
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"🐑 *Order placed!*\n\n"
-                        f"Profile: *{profile.name or masked}*\n"
-                        f"Phone: `{profile.phone}`\n\n"
-                        "Your order has been submitted successfully!"
-                    ),
+                    text=t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour order has been submitted successfully!").format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
             elif outcome == "order_fail":
                 logger.error("Order failed for profile %s: %s", profile.id, detail)
                 await profile_db.set_profile_status(db_path, profile.id, "registered")
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"❌ *Order failed for {profile.name or masked}*\n\n"
-                        f"Error: {detail}\n\n"
-                        "The profile is still registered. Will retry next time quota is available."
-                    ),
+                    text=t(lang, "❌ *Order failed for {name}*\n\nError: {detail}\n\nThe profile is still registered. Will retry next time quota is available.").format(name=profile.name or masked, detail=detail),
                     parse_mode="Markdown",
                 )
             elif outcome == "login_fail":
                 logger.error("Login failed for profile %s: %s", profile.id, detail)
                 await profile_db.set_profile_status(db_path, profile.id, "registered")
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"❌ *Login failed for {profile.name or masked}*\n\n"
-                        f"Error: {detail}\n\n"
-                        "Will retry next time quota is available."
-                    ),
+                    text=t(lang, "❌ *Login failed for {name}*\n\nError: {detail}\n\nWill retry next time quota is available.").format(name=profile.name or masked, detail=detail),
                     parse_mode="Markdown",
                 )
             else:
                 logger.error("Login+order error for profile %s: %s", profile.id, detail)
                 await profile_db.set_profile_status(db_path, profile.id, "registered")
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ Error for profile *{profile.name or masked}*:\n{detail}",
+                    text=t(lang, "❌ Error for profile *{name}*:\n{detail}").format(name=profile.name or masked, detail=detail),
                     parse_mode="Markdown",
                 )
     except Forbidden:
@@ -653,14 +641,10 @@ async def _process_user_profiles(
             if outcome == "submitted":
                 await profile_db.set_profile_status(db_path, profile.id, "submitted")
                 masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"✅ *Registration submitted!*\n\n"
-                        f"Profile: *{profile.name or masked}*\n"
-                        f"Phone: `{profile.phone}`\n\n"
-                        "Your spot is secured! Use /verifyotp to complete OTP verification when ready."
-                    ),
+                    text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour spot is secured! Use /verifyotp to complete OTP verification when ready.").format(name=profile.name or masked, phone=profile.phone),
                     parse_mode="Markdown",
                 )
             elif outcome == "already_registered":
@@ -676,23 +660,17 @@ async def _process_user_profiles(
                 masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
                 if l_outcome == "ordered":
                     await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                    lang = await get_user_language(db_path, user_id)
                     await app.bot.send_message(
                         chat_id=user_id,
-                        text=(
-                            f"🐑 *Order placed!*\n\n"
-                            f"Profile: *{l_profile.name or masked}*\n"
-                            "Account was already active; order was submitted successfully!"
-                        ),
+                        text=t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nAccount was already active; order was submitted successfully!").format(name=l_profile.name or masked),
                         parse_mode="Markdown",
                     )
                 else:
+                    lang = await get_user_language(db_path, user_id)
                     await app.bot.send_message(
                         chat_id=user_id,
-                        text=(
-                            f"🟡 *Account already active for {profile.name or masked}*\n\n"
-                            f"I tried to log in and place an order, but failed: {l_detail}\n"
-                            "Status updated to *registered*. Will retry order next time."
-                        ),
+                        text=t(lang, "🟡 *Account already active for {name}*\n\nI tried to log in and place an order, but failed: {detail}\nStatus updated to *registered*. Will retry order next time.").format(name=profile.name or masked, detail=l_detail),
                         parse_mode="Markdown",
                     )
             elif outcome == "ip_blocked":
@@ -705,20 +683,18 @@ async def _process_user_profiles(
             elif outcome == "quota_closed":
                 await profile_db.set_profile_status(db_path, profile.id, "pending")
                 masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"⏳ *Registration missed for {profile.name or masked}*\n\n"
-                        f"The quota closed while I was solving the CAPTCHA.\n"
-                        "I've reset the profile to *pending*. Will try again immediately when it re-opens!"
-                    ),
+                    text=t(lang, "⏳ *Registration missed for {name}*\n\nThe quota closed while I was solving the CAPTCHA.\nI've reset the profile to *pending*. Will try again immediately when it re-opens!").format(name=profile.name or masked),
                     parse_mode="Markdown",
                 )
             else:
                 await profile_db.set_profile_status(db_path, profile.id, "failed")
+                lang = await get_user_language(db_path, user_id)
                 await app.bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
+                    text=t(lang, "❌ Registration failed for profile *{name}*:\n{detail}").format(name=profile.name, detail=detail),
                     parse_mode="Markdown",
                 )
 
@@ -761,30 +737,25 @@ async def _process_user_profiles(
                         masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
                         if l_outcome == "ordered":
                             await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                            lang = await get_user_language(db_path, user_id)
                             await app.bot.send_message(
                                 chat_id=user_id,
-                                text=(
-                                    f"🐑 *Order placed!*\n\n"
-                                    f"Profile: *{l_profile.name or masked}*\n"
-                                    "Account was already active; order was submitted successfully!"
-                                ),
+                                text=t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nAccount was already active; order was submitted successfully!").format(name=l_profile.name or masked),
                                 parse_mode="Markdown",
                             )
                         else:
+                            lang = await get_user_language(db_path, user_id)
                             await app.bot.send_message(
                                 chat_id=user_id,
-                                text=(
-                                    f"🟡 *Account already active for {profile.name or masked}*\n\n"
-                                    f"I tried to log in and place an order, but failed: {l_detail}\n"
-                                    "Status updated to *registered*. Will retry order next time."
-                                ),
+                                text=t(lang, "🟡 *Account already active for {name}*\n\nI tried to log in and place an order, but failed: {detail}\nStatus updated to *registered*. Will retry order next time.").format(name=profile.name or masked, detail=l_detail),
                                 parse_mode="Markdown",
                             )
                     elif outcome == "ip_blocked":
                         await profile_db.set_profile_status(db_path, profile.id, "pending")
+                        lang = await get_user_language(db_path, user_id)
                         await app.bot.send_message(
                             chat_id=user_id,
-                            text=f"⚠️ *IP Blocked during Phase 2* for {profile.name or masked}. Resetting to pending.",
+                            text=t(lang, "⚠️ *IP Blocked during Phase 2* for {name}. Resetting to pending.").format(name=profile.name or masked),
                             parse_mode="Markdown",
                         )
                     elif outcome == "captcha_fail":
@@ -793,20 +764,18 @@ async def _process_user_profiles(
                     elif outcome == "quota_closed":
                         await profile_db.set_profile_status(db_path, profile.id, "pending")
                         masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                        lang = await get_user_language(db_path, user_id)
                         await app.bot.send_message(
                             chat_id=user_id,
-                            text=(
-                                f"⏳ *Registration missed (Phase 2) for {profile.name or masked}*\n\n"
-                                f"The quota closed while I was solving the CAPTCHA.\n"
-                                "I've reset the profile to *pending*. Will try again when it re-opens!"
-                            ),
+                            text=t(lang, "⏳ *Registration missed (Phase 2) for {name}*\n\nThe quota closed while I was solving the CAPTCHA.\nI've reset the profile to *pending*. Will try again when it re-opens!").format(name=profile.name or masked),
                             parse_mode="Markdown",
                         )
                     else:
                         await profile_db.set_profile_status(db_path, profile.id, "failed")
+                        lang = await get_user_language(db_path, user_id)
                         await app.bot.send_message(
                             chat_id=user_id,
-                            text=f"❌ Registration failed for profile *{profile.name}*:\n{detail}",
+                            text=t(lang, "❌ Registration failed for profile *{name}*:\n{detail}").format(name=profile.name, detail=detail),
                             parse_mode="Markdown",
                         )
     except Forbidden:
@@ -828,9 +797,10 @@ async def _send_manual_captcha(
     captcha = await _fetch_captcha_raw(client, base_headers)
     if not captcha:
         await profile_db.set_profile_status(db_path, profile.id, "pending")
+        lang = await get_user_language(db_path, user_id)
         await app.bot.send_message(
             chat_id=user_id,
-            text=f"⚠️ Could not generate CAPTCHA for profile *{profile.name}*. Will retry next cycle.",
+            text=t(lang, "⚠️ Could not generate CAPTCHA for profile *{name}*. Will retry next cycle.").format(name=profile.name),
             parse_mode="Markdown",
         )
         return
@@ -839,16 +809,11 @@ async def _send_manual_captcha(
 
     # Store pending manual captcha keyed by user_id and message_id
     masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+    lang = await get_user_language(db_path, user_id)
     msg = await app.bot.send_photo(
         chat_id=user_id,
         photo=io.BytesIO(image_bytes),
-        caption=(
-            f"🔐 *Manual CAPTCHA needed*\n\n"
-            f"Profile: *{profile.name or masked}*\n"
-            f"Phone: `{profile.phone}`\n\n"
-            "Auto-solve failed. **Reply to this message** with the CAPTCHA answer.\n"
-            f"_Expires in {_CAPTCHA_TTL_S} seconds._"
-        ),
+        caption=t(lang, "🔐 *Manual CAPTCHA needed*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nAuto-solve failed. **Reply to this message** with the CAPTCHA answer.\n_Expires in {expires_in} seconds._").format(name=profile.name or masked, phone=profile.phone, expires_in=_CAPTCHA_TTL_S),
         parse_mode="Markdown",
     )
 

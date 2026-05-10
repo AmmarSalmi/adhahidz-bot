@@ -6,16 +6,26 @@ import logging
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
 from . import db as db_mod
+from .i18n import t
+from .db import get_user_language
 
 logger = logging.getLogger(__name__)
 
 
-async def notify_users(bot, user_ids: list[int], message: str, db_path: str | None = None) -> None:
+async def notify_users(bot, user_ids: list[int], message: str, db_path: str | None = None, format_kwargs: dict = None) -> None:
     for user_id in user_ids:
         delay_s = 1.0
+        lang = "en"
+        if db_path:
+            lang = await get_user_language(db_path, user_id)
+        
+        localized_message = t(lang, message)
+        if format_kwargs:
+            localized_message = localized_message.format(**format_kwargs)
+            
         for attempt in range(5):
             try:
-                await bot.send_message(chat_id=user_id, text=message)
+                await bot.send_message(chat_id=user_id, text=localized_message)
                 break
             except RetryAfter as e:
                 wait_s = float(getattr(e, "retry_after", 1.0))

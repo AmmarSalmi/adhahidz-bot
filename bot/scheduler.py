@@ -12,6 +12,8 @@ from . import profile_db
 from .api_client import QuotaApiClient, QuotaStatus
 from .auto_registration import auto_submit_profiles, remind_preregistered_profiles
 from .notifier import notify_users
+from .i18n import t
+from .db import get_user_language
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +94,7 @@ async def _poll_once(
                 to_notify = await db_mod.get_subscribers_to_notify(db_path, wilaya_code)
                 if to_notify:
                     remaining_txt = "unknown" if status.remaining is None else str(status.remaining)
-                    msg = f"✅ Quota available in {status.wilaya_name}! Remaining: {remaining_txt} units."
-                    await notify_users(app.bot, to_notify, msg, db_path=db_path)
+                    await notify_users(app.bot, to_notify, "✅ Quota available in {wilaya_name}! Remaining: {remaining} units.", db_path=db_path, format_kwargs={"wilaya_name": status.wilaya_name, "remaining": remaining_txt})
                     await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
                 # Auto-registration: trigger every poll if actionable profiles exist (Aggressive Mode)
@@ -115,8 +116,7 @@ async def _poll_once(
                 previously_notified = await db_mod.get_notified_subscribers(db_path, wilaya_code)
                 if previously_notified:
                     wilaya_name = status.wilaya_name if status else wilaya_code
-                    gone_msg = f"❌ Quota in {wilaya_name} is no longer available."
-                    await notify_users(app.bot, previously_notified, gone_msg, db_path=db_path)
+                    await notify_users(app.bot, previously_notified, "❌ Quota in {wilaya_name} is no longer available.", db_path=db_path, format_kwargs={"wilaya_name": wilaya_name})
                 await db_mod.reset_notified_for_wilaya(db_path, wilaya_code)
     except Exception as e:
         import httpx
@@ -179,9 +179,10 @@ async def remove_excess_profiles_job(app, db_path: str) -> None:
                     await profile_db.delete_profile(db_path, p.id, user_id)
                     removed_count += 1
                 try:
+                    lang = await get_user_language(db_path, user_id)
                     await app.bot.send_message(
                         chat_id=user_id,
-                        text=f"⚠️ *Profiles Removed*\n\nAs notified, {len(excess_profiles)} of your excess profiles have been automatically removed to enforce the 3-profile limit.",
+                        text=t(lang, "⚠️ *Profiles Removed*\n\nAs notified, {count} of your excess profiles have been automatically removed to enforce the 3-profile limit.").format(count=len(excess_profiles)),
                         parse_mode="Markdown",
                     )
                 except Exception:

@@ -7,6 +7,19 @@ logger = logging.getLogger(__name__)
 
 _TRANSLATIONS = {
     "ar": {
+        "✅ Name '{text}' recorded.\n\nStep 2/9 — Enter the *NIN* (18 digits):": "✅ تم تسجيل الاسم '{text}'.\n\nالخطوة 2/9 — أدخل *رقم التعريف الوطني* (18 رقمًا):",
+        "❌ NIN must be exactly *18 digits*. Try again:": "❌ يجب أن يكون *رقم التعريف الوطني* 18 رقمًا بالضبط. حاول مرة أخرى:",
+        "✅ NIN recorded.\n\nStep 3/9 — Enter the *CNIBE* (9 digits):": "✅ تم تسجيل رقم التعريف الوطني.\n\nالخطوة 3/9 — أدخل *رقم بطاقة التعريف* (9 أرقام):",
+        "❌ CNIBE must be exactly *9 digits*. Try again:": "❌ يجب أن يكون *رقم بطاقة التعريف* 9 أرقام بالضبط. حاول مرة أخرى:",
+        "✅ CNIBE recorded.\n\nStep 4/9 — Enter the *phone number* (10 digits, starts with 0):": "✅ تم تسجيل رقم بطاقة التعريف.\n\nالخطوة 4/9 — أدخل *رقم الهاتف* (10 أرقام، يبدأ بـ 0):",
+        "❌ NIN must be 18 digits. Try again:": "❌ يجب أن يكون رقم التعريف الوطني 18 رقمًا. حاول مرة أخرى:",
+        "❌ CNIBE must be 9 digits. Try again:": "❌ يجب أن يكون رقم بطاقة التعريف 9 أرقام. حاول مرة أخرى:",
+        "📋 *Forced Registration*\n\nI'll guide you through the registration process step by step.\n\nStep 1/10 — Enter your *NIN* (National Identification Number).\nIt must be exactly *18 digits*.": "📋 *تسجيل إجباري*\n\nسأرشدك خلال عملية التسجيل خطوة بخطوة.\n\nالخطوة 1/10 — أدخل *رقم التعريف الوطني*.\nيجب أن يكون *18 رقمًا* بالضبط.",
+        "❌ Invalid NIN. It must be exactly *18 digits* (numeric only).\nPlease try again:": "❌ رقم التعريف الوطني غير صالح. يجب أن يكون *18 رقمًا* بالضبط (أرقام فقط).\nيرجى المحاولة مرة أخرى:",
+        "✅ NIN recorded.\n\nStep 2/10 — Enter your *CNIBE* (ID card issue number).\nIt must be exactly *9 digits*.": "✅ تم تسجيل رقم التعريف الوطني.\n\nالخطوة 2/10 — أدخل *رقم بطاقة التعريف*.\nيجب أن يكون *9 أرقام* بالضبط.",
+        "❌ Invalid CNIBE. It must be exactly *9 digits* (numeric only).\nPlease try again:": "❌ رقم بطاقة التعريف غير صالح. يجب أن يكون *9 أرقام* بالضبط (أرقام فقط).\nيرجى المحاولة مرة أخرى:",
+        "✅ CNIBE recorded.\n\nStep 3/10 — Enter your *phone number*.\nIt must be exactly *10 digits* and start with *0*.": "✅ تم تسجيل رقم بطاقة التعريف.\n\nالخطوة 3/10 — أدخل *رقم الهاتف*.\nيجب أن يكون *10 أرقام* بالضبط ويبدأ بـ *0*.",
+
         "Welcome! I couldn't load the Wilaya list yet (API unavailable). Send /change later to try again.": "مرحباً! لم أتمكن من تحميل قائمة الولايات (الخدمة غير متاحة). أرسل /change لاحقاً.",
         "Welcome! Choose your Wilaya to receive quota notifications:": "مرحباً! اختر ولايتك لتلقي إشعارات الحصص:",
         "Wilaya list not available yet. Please try again later.": "قائمة الولايات غير متاحة حالياً. يرجى المحاولة لاحقاً.",

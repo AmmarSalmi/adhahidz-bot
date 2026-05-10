@@ -125,13 +125,8 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
     # Reset any previous state
     context.user_data["reg"] = {}
-    await update.effective_message.reply_text(
-        "📋 *Forced Registration*\n\n"
-        "I'll guide you through the registration process step by step.\n\n"
-        "Step 1/10 — Enter your *NIN* (National Identification Number).\n"
-        "It must be exactly *18 digits*.",
-        parse_mode="Markdown",
-    )
+    lang = await get_lang(context, update.effective_user.id)
+    await update.effective_message.reply_text(t(lang, "📋 *Forced Registration*\n\nI'll guide you through the registration process step by step.\n\nStep 1/10 — Enter your *NIN* (National Identification Number).\nIt must be exactly *18 digits*."), parse_mode="Markdown")
     return ASK_NIN
 
 
@@ -140,20 +135,14 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def collect_nin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     if not text.isdigit() or len(text) != 18:
-        await update.message.reply_text(
-            "❌ Invalid NIN. It must be exactly *18 digits* (numeric only).\nPlease try again:",
-            parse_mode="Markdown",
-        )
+        lang = await get_lang(context, update.effective_user.id)
+        await update.message.reply_text(t(lang, "❌ Invalid NIN. It must be exactly *18 digits* (numeric only).\nPlease try again:"), parse_mode="Markdown")
         return ASK_NIN
 
     state = _reg_state(context)
     state["nin"] = text
-    await update.message.reply_text(
-        "✅ NIN recorded.\n\n"
-        "Step 2/10 — Enter your *CNIBE* (ID card issue number).\n"
-        "It must be exactly *9 digits*.",
-        parse_mode="Markdown",
-    )
+    lang = await get_lang(context, update.effective_user.id)
+    await update.message.reply_text(t(lang, "✅ NIN recorded.\n\nStep 2/10 — Enter your *CNIBE* (ID card issue number).\nIt must be exactly *9 digits*."), parse_mode="Markdown")
     return ASK_CNIBE
 
 
@@ -162,20 +151,14 @@ async def collect_nin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def collect_cnibe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     if not text.isdigit() or len(text) != 9:
-        await update.message.reply_text(
-            "❌ Invalid CNIBE. It must be exactly *9 digits* (numeric only).\nPlease try again:",
-            parse_mode="Markdown",
-        )
+        lang = await get_lang(context, update.effective_user.id)
+        await update.message.reply_text(t(lang, "❌ Invalid CNIBE. It must be exactly *9 digits* (numeric only).\nPlease try again:"), parse_mode="Markdown")
         return ASK_CNIBE
 
     state = _reg_state(context)
     state["cnibe"] = text
-    await update.message.reply_text(
-        "✅ CNIBE recorded.\n\n"
-        "Step 3/10 — Enter your *phone number*.\n"
-        "It must be exactly *10 digits* and start with *0*.",
-        parse_mode="Markdown",
-    )
+    lang = await get_lang(context, update.effective_user.id)
+    await update.message.reply_text(t(lang, "✅ CNIBE recorded.\n\nStep 3/10 — Enter your *phone number*.\nIt must be exactly *10 digits* and start with *0*."), parse_mode="Markdown")
     return ASK_PHONE
 
 
@@ -184,10 +167,8 @@ async def collect_cnibe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     if not text.isdigit() or len(text) != 10 or not text.startswith("0"):
-        await update.message.reply_text(
-            "❌ Invalid phone number. It must be exactly *10 digits* and start with *0*.\nPlease try again:",
-            parse_mode="Markdown",
-        )
+        lang = await get_lang(context, update.effective_user.id)
+        await update.message.reply_text(t(lang, "❌ Invalid phone number. It must be exactly *10 digits* and start with *0*.\nPlease try again:"), parse_mode="Markdown")
         return ASK_PHONE
 
     state = _reg_state(context)
@@ -198,17 +179,12 @@ async def collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         context.application.bot_data.get("wilayas", [])
     )
     if not wilayas:
-        await update.message.reply_text(
-            "⚠️ Wilaya list is not available. Please try again later with /register."
-        )
+        lang = await get_lang(context, update.effective_user.id)
+        await update.message.reply_text(t(lang, "⚠️ Wilaya list is not available. Please try again later with /register."))
         return ConversationHandler.END
 
-    await update.message.reply_text(
-        "✅ Phone number recorded.\n\n"
-        "Step 4/10 — Select your *Wilaya*:",
-        parse_mode="Markdown",
-        reply_markup=_wilaya_keyboard(wilayas),
-    )
+    lang = await get_lang(context, update.effective_user.id)
+    await update.message.reply_text(t(lang, "✅ Phone number recorded.\n\nStep 4/10 — Select your *Wilaya*:"), parse_mode="Markdown", reply_markup=_wilaya_keyboard(wilayas))
     return ASK_WILAYA
 
 
@@ -268,32 +244,28 @@ async def on_wilaya_selected(
         return ConversationHandler.END
 
     # Fetch communes for this wilaya
-    await query.edit_message_text(f"✅ Wilaya *{wilaya_name}* selected.\n\n⏳ Fetching communes…", parse_mode="Markdown")
+    lang = await get_lang(context, update.effective_user.id)
+    await query.edit_message_text(t(lang, "✅ Wilaya *{wilaya_name}* selected.\n\n⏳ Fetching communes…").format(wilaya_name=wilaya_name), parse_mode="Markdown")
 
     try:
         communes = await _fetch_communes(context, int(wilaya_code))
     except Exception as exc:
         logger.exception("Failed to fetch communes for wilaya %s", wilaya_code)
-        await query.edit_message_text(
-            f"❌ Failed to fetch communes: {exc}\nPlease try again with /register."
-        )
+        lang = await get_lang(context, update.effective_user.id)
+        await query.edit_message_text(t(lang, "❌ Failed to fetch communes: {exc}\nPlease try again with /register.").format(exc=exc))
         return ConversationHandler.END
 
     active_communes = [c for c in communes if c.get("isActive")]
     if not active_communes:
-        await query.edit_message_text(
-            "⚠️ No active communes found for this wilaya. Please try another wilaya with /register."
-        )
+        lang = await get_lang(context, update.effective_user.id)
+        await query.edit_message_text(t(lang, "⚠️ No active communes found for this wilaya. Please try another wilaya with /register."))
         return ConversationHandler.END
 
     state["_communes"] = active_communes
 
     keyboard = _commune_keyboard(active_communes)
-    await query.edit_message_text(
-        "Step 5/10 — Select your *Commune*:",
-        parse_mode="Markdown",
-        reply_markup=keyboard,
-    )
+    lang = await get_lang(context, update.effective_user.id)
+    await query.edit_message_text(t(lang, "Step 5/10 — Select your *Commune*:"), parse_mode="Markdown", reply_markup=keyboard)
     return ASK_COMMUNE
 
 
@@ -367,12 +339,8 @@ async def on_commune_selected(
             commune_name = c["name"]
             break
 
-    await query.edit_message_text(
-        f"✅ Commune *{commune_name}* selected.\n\n"
-        "Step 6/10 — Enter a *password* for your adhahi.dz account:\n"
-        "_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_",
-        parse_mode="Markdown",
-    )
+    lang = await get_lang(context, update.effective_user.id)
+    await query.edit_message_text(t(lang, "✅ Commune *{commune_name}* selected.\n\nStep 6/10 — Enter a *password* for your adhahi.dz account:\n_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_").format(commune_name=commune_name), parse_mode="Markdown")
     return ASK_PASSWORD
 
 
@@ -391,9 +359,9 @@ async def _generate_and_send_captcha(
         logger.exception("Failed to generate CAPTCHA")
         msg = f"❌ Failed to generate CAPTCHA: {exc}\nPlease try again with /register."
         if edit_message:
-            await edit_message.edit_text(msg)
+            await edit_message.edit_text(t(await get_lang(context, update.effective_user.id), msg))
         else:
-            await update.effective_message.reply_text(msg)
+            await update.effective_message.reply_text(t(await get_lang(context, update.effective_user.id), msg))
         return ConversationHandler.END
 
     state["captchaId"] = captcha_data["captchaId"]
@@ -413,17 +381,14 @@ async def _generate_and_send_captcha(
     chat_id = update.effective_chat.id
 
     if edit_message:
-        await edit_message.edit_text("Step 6/9 — Solve the CAPTCHA below:")
+        lang = await get_lang(context, update.effective_user.id)
+        await edit_message.edit_text(t(lang, "Step 6/9 — Solve the CAPTCHA below:"))
 
-    # Send the CAPTCHA image
+    lang = await get_lang(context, update.effective_user.id)
     await context.bot.send_photo(
         chat_id=chat_id,
         photo=io.BytesIO(image_bytes),
-        caption=(
-            "🔐 *CAPTCHA*\n\n"
-            "Please type your answer below.\n"
-            f"_This CAPTCHA expires in {expires_in} seconds._"
-        ),
+        caption=t(lang, "🔐 *CAPTCHA*\\n\\nPlease type your answer below.\\n_This CAPTCHA expires in {expires_in} seconds._").format(expires_in=expires_in),
         parse_mode="Markdown",
     )
     return ASK_CAPTCHA
@@ -445,16 +410,17 @@ async def collect_captcha_answer(
     # Check if CAPTCHA has expired
     generated_at = state.get("captcha_generated_at", 0)
     if time.time() - generated_at > _CAPTCHA_TTL_S:
+        lang = await get_lang(context, update.effective_user.id)
         await update.message.reply_text(
-            "⏰ The CAPTCHA has expired. Generating a new one…"
+            t(lang, "⏰ The CAPTCHA has expired. Generating a new one…")
         )
         return await _generate_and_send_captcha(update, context)
 
     state["captchaAnswer"] = update.message.text.strip()
 
+    lang = await get_lang(context, update.effective_user.id)
     await update.message.reply_text(
-        "✅ CAPTCHA answer recorded.\n\n"
-        "⏳ Submitting your registration…"
+        t(lang, "✅ CAPTCHA answer recorded.\\n\\n⏳ Submitting your registration…")
     )
     return await _submit_registration(update, context)
 
@@ -466,10 +432,11 @@ async def collect_password(
 ) -> int:
     text = update.message.text.strip()
     errors = _validate_password(text)
+    lang = await get_lang(context, update.effective_user.id)
     if errors:
         bullet_list = "\n".join(f"  • {e}" for e in errors)
         await update.message.reply_text(
-            f"❌ Invalid password:\n{bullet_list}\n\nPlease try again:",
+            t(lang, "❌ Invalid password:\\n{bullet_list}\\n\\nPlease try again:").format(bullet_list=bullet_list),
         )
         return ASK_PASSWORD
 
@@ -482,8 +449,7 @@ async def collect_password(
         for code, label in _PAYMENT_METHODS.items()
     ]
     await update.message.reply_text(
-        "✅ Password recorded.\n\n"
-        "Step 7/10 — Select a *payment method*:",
+        t(lang, "✅ Password recorded.\\n\\nStep 7/10 — Select a *payment method*:"),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(pm_rows),
     )
@@ -504,8 +470,9 @@ async def on_payment_method_selected(
         return ASK_PAYMENT_METHOD
 
     method = data.split(":", 1)[1]
+    lang = await get_lang(context, update.effective_user.id)
     if method not in _PAYMENT_METHODS:
-        await query.edit_message_text("❌ Invalid payment method. Try again.")
+        await query.edit_message_text(t(lang, "❌ Invalid payment method. Try again."))
         return ASK_PAYMENT_METHOD
 
     state = _reg_state(context)
@@ -513,8 +480,7 @@ async def on_payment_method_selected(
 
     label = _PAYMENT_METHODS[method]
     await query.edit_message_text(
-        f"✅ Payment method *{label}* selected.\n\n"
-        "⏳ Generating CAPTCHA…",
+        t(lang, "✅ Payment method *{label}* selected.\\n\\n⏳ Generating CAPTCHA…").format(label=label),
         parse_mode="Markdown",
     )
     return await _generate_and_send_captcha(update, context, edit_message=None)
@@ -577,9 +543,9 @@ async def _submit_registration(
     except Exception as exc:
         err_type = type(exc).__name__
         logger.error("Registration request failed (%s): %s", err_type, exc)
+        lang = await get_lang(context, update.effective_user.id)
         await update.effective_message.reply_text(
-            f"❌ Registration failed due to a network error ({err_type}):\n`{exc}`\n\n"
-            "Please try again with /register.",
+            t(lang, "❌ Registration failed due to a network error ({err_type}):\\n`{exc}`\\n\\nPlease try again with /register.").format(err_type=err_type, exc=exc),
             parse_mode="Markdown",
         )
         return ConversationHandler.END
@@ -591,10 +557,9 @@ async def _submit_registration(
             resp.status_code,
             resp.text,
         )
+        lang = await get_lang(context, update.effective_user.id)
         await update.effective_message.reply_text(
-            "✅ Registration submitted!\n\n"
-            "Step 8/10 — An OTP has been sent to your phone.\n"
-            "Please enter the *OTP* you received:",
+            t(lang, "✅ Registration submitted!\\n\\nStep 8/10 — An OTP has been sent to your phone.\\nPlease enter the *OTP* you received:"),
             parse_mode="Markdown",
         )
         return ASK_OTP
@@ -611,11 +576,9 @@ async def _submit_registration(
             server_msg = data.get("message", "")
         except Exception:
             server_msg = ""
+        lang = await get_lang(context, update.effective_user.id)
         await update.effective_message.reply_text(
-            "⚠️ *Registration already in progress*\n\n"
-            f"{server_msg}\n\n"
-            "An OTP should have been sent to your phone.\n"
-            "Please enter the *OTP* you received:",
+            t(lang, "⚠️ *Registration already in progress*\\n\\n{server_msg}\\n\\nAn OTP should have been sent to your phone.\\nPlease enter the *OTP* you received:").format(server_msg=server_msg),
             parse_mode="Markdown",
         )
         return ASK_OTP
@@ -628,10 +591,9 @@ async def _submit_registration(
         body_text,
     )
     error_detail = _extract_error_message(resp)
+    lang = await get_lang(context, update.effective_user.id)
     await update.effective_message.reply_text(
-        f"❌ Registration failed (HTTP {resp.status_code}).\n\n"
-        f"Error: {error_detail}\n\n"
-        "Please try again with /register.",
+        t(lang, "❌ Registration failed (HTTP {status}).\\n\\nError: {error_detail}\\n\\nPlease try again with /register.").format(status=resp.status_code, error_detail=error_detail),
     )
     return ConversationHandler.END
 
@@ -658,7 +620,8 @@ async def collect_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     otp = update.message.text.strip()
     state["otp"] = otp
 
-    await update.message.reply_text("⏳ Verifying OTP…")
+    lang = await get_lang(context, update.effective_user.id)
+    await update.message.reply_text(t(lang, "⏳ Verifying OTP…"))
 
     return await _verify_otp(update, context)
 
@@ -687,9 +650,9 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     except Exception as exc:
         err_type = type(exc).__name__
         logger.error("OTP verification request failed (%s): %s", err_type, exc)
+        lang = await get_lang(context, update.effective_user.id)
         await update.effective_message.reply_text(
-            f"❌ OTP verification failed due to a network error ({err_type}):\n`{exc}`\n\n"
-            "Please try again with /register.",
+            t(lang, "❌ OTP verification failed due to a network error ({err_type}):\\n`{exc}`\\n\\nPlease try again with /register.").format(err_type=err_type, exc=exc),
             parse_mode="Markdown",
         )
         return ConversationHandler.END
@@ -701,9 +664,9 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             resp.status_code,
             resp.text,
         )
+        lang = await get_lang(context, update.effective_user.id)
         await update.effective_message.reply_text(
-            "🎉 *Registration Complete!*\n\n"
-            "Congratulations! Your registration has been verified successfully.",
+            t(lang, "🎉 *Registration Complete!*\\n\\nCongratulations! Your registration has been verified successfully."),
             parse_mode="Markdown",
         )
     else:
@@ -714,10 +677,9 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             body_text,
         )
         error_detail = _extract_error_message(resp)
+        lang = await get_lang(context, update.effective_user.id)
         await update.effective_message.reply_text(
-            f"❌ OTP verification failed (HTTP {resp.status_code}).\n\n"
-            f"Error: {error_detail}\n\n"
-            "Please try again with /register.",
+            t(lang, "❌ OTP verification failed (HTTP {status}).\\n\\nError: {error_detail}\\n\\nPlease try again with /register.").format(status=resp.status_code, error_detail=error_detail),
         )
 
     # Clean up session state
@@ -731,8 +693,9 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("reg", None)
     await _close_http_client(context)
+    lang = await get_lang(context, update.effective_user.id)
     await update.effective_message.reply_text(
-        "Registration cancelled. You can start again with /register."
+        t(lang, "Registration cancelled. You can start again with /register.")
     )
     return ConversationHandler.END
 

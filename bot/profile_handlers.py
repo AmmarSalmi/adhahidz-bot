@@ -69,8 +69,7 @@ async def addprofile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     context.user_data["add_profile"] = {}
     await update.effective_message.reply_text(
-        "📋 *Add Registration Profile*\n\n"
-        "Step 1/9 — Enter a short *Name* for this profile (e.g. 'Dad', 'My Profile'):",
+        t(lang, "📋 *Add Registration Profile*\n\nStep 1/9 — Enter a short *Name* for this profile (e.g. 'Dad', 'My Profile'):"),
         parse_mode="Markdown",
     )
     return AP_NAME
@@ -78,12 +77,13 @@ async def addprofile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def ap_collect_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
+    lang = await get_lang(context, update.effective_user.id)
     if not text:
-        await update.message.reply_text("❌ Name cannot be empty. Try again:")
+        await update.message.reply_text(t(lang, "❌ Name cannot be empty. Try again:"))
         return AP_NAME
     _ap_state(context)["name"] = text
     await update.message.reply_text(
-        f"✅ Name '{text}' recorded.\n\nStep 2/9 — Enter the *NIN* (18 digits):",
+        t(lang, "✅ Name '{text}' recorded.\n\nStep 2/9 — Enter the *NIN* (18 digits):").format(text=text),
         parse_mode="Markdown",
     )
     return AP_NIN
@@ -91,15 +91,16 @@ async def ap_collect_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def ap_collect_nin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
+    lang = await get_lang(context, update.effective_user.id)
     if not text.isdigit() or len(text) != 18:
         await update.message.reply_text(
-            "❌ NIN must be exactly *18 digits*. Try again:",
+            t(lang, "❌ NIN must be exactly *18 digits*. Try again:"),
             parse_mode="Markdown",
         )
         return AP_NIN
     _ap_state(context)["nin"] = text
     await update.message.reply_text(
-        "✅ NIN recorded.\n\nStep 3/9 — Enter the *CNIBE* (9 digits):",
+        t(lang, "✅ NIN recorded.\n\nStep 3/9 — Enter the *CNIBE* (9 digits):"),
         parse_mode="Markdown",
     )
     return AP_CNIBE
@@ -107,15 +108,16 @@ async def ap_collect_nin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def ap_collect_cnibe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
+    lang = await get_lang(context, update.effective_user.id)
     if not text.isdigit() or len(text) != 9:
         await update.message.reply_text(
-            "❌ CNIBE must be exactly *9 digits*. Try again:",
+            t(lang, "❌ CNIBE must be exactly *9 digits*. Try again:"),
             parse_mode="Markdown",
         )
         return AP_CNIBE
     _ap_state(context)["cnibe"] = text
     await update.message.reply_text(
-        "✅ CNIBE recorded.\n\nStep 4/9 — Enter the *phone number* (10 digits, starts with 0):",
+        t(lang, "✅ CNIBE recorded.\n\nStep 4/9 — Enter the *phone number* (10 digits, starts with 0):"),
         parse_mode="Markdown",
     )
     return AP_PHONE
@@ -123,17 +125,16 @@ async def ap_collect_cnibe(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def ap_collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
+    lang = await get_lang(context, update.effective_user.id)
     if not text.isdigit() or len(text) != 10 or not text.startswith("0"):
         await update.message.reply_text(
-            "❌ Phone must be exactly *10 digits* starting with *0*. Try again:",
+            t(lang, "❌ Phone must be exactly *10 digits* starting with *0*. Try again:"),
             parse_mode="Markdown",
         )
         return AP_PHONE
     _ap_state(context)["phone"] = text
     await update.message.reply_text(
-        "✅ Phone recorded.\n\n"
-        "Step 5/9 — Enter a *password* for the adhahi.dz account:\n"
-        "_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_",
+        t(lang, "✅ Phone recorded.\n\nStep 5/9 — Enter a *password* for the adhahi.dz account:\n_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_"),
         parse_mode="Markdown",
     )
     return AP_PASSWORD
@@ -141,10 +142,11 @@ async def ap_collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def ap_collect_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
+    lang = await get_lang(context, update.effective_user.id)
     errors = _validate_password(text)
     if errors:
         bullet_list = "\n".join(f"  • {e}" for e in errors)
-        await update.message.reply_text(f"❌ Invalid password:\n{bullet_list}\n\nTry again:")
+        await update.message.reply_text(t(lang, "❌ Invalid password:\n{bullet_list}\n\nTry again:").format(bullet_list=bullet_list))
         return AP_PASSWORD
 
     _ap_state(context)["password"] = text
@@ -154,12 +156,12 @@ async def ap_collect_password(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     if not wilayas:
         await update.message.reply_text(
-            "⚠️ Wilaya list not available. Try /addprofile later."
+            t(lang, "⚠️ Wilaya list not available. Try /addprofile later.")
         )
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "✅ Password recorded.\n\nStep 6/9 — Select the *Wilaya*:",
+        t(lang, "✅ Password recorded.\n\nStep 6/9 — Select the *Wilaya*:"),
         parse_mode="Markdown",
         reply_markup=_wilaya_kb(wilayas),
     )
@@ -181,6 +183,7 @@ def _wilaya_kb(wilayas: list[tuple[str, str]], *, cols: int = 2) -> InlineKeyboa
 
 async def ap_on_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    lang = await get_lang(context, update.effective_user.id)
     if not query:
         return AP_WILAYA
     await query.answer()
@@ -198,7 +201,7 @@ async def ap_on_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     state["wilaya_name"] = wilaya_name
 
     await query.edit_message_text(
-        f"✅ Wilaya *{wilaya_name}* selected.\n\n⏳ Fetching communes…",
+        t(lang, "✅ Wilaya *{wilaya_name}* selected.\n\n⏳ Fetching communes…").format(wilaya_name=wilaya_name),
         parse_mode="Markdown",
     )
 
@@ -208,12 +211,12 @@ async def ap_on_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         communes = await _fetch_communes(context, int(code))
     except Exception as exc:
         logger.exception("Failed to fetch communes for wilaya %s", code)
-        await query.edit_message_text(f"❌ Failed to fetch communes: {exc}")
+        await query.edit_message_text(t(lang, "❌ Failed to fetch communes: {exc}").format(exc=exc))
         return ConversationHandler.END
 
     active = [c for c in communes if c.get("isActive")]
     if not active:
-        await query.edit_message_text("⚠️ No active communes. Try a different wilaya with /addprofile.")
+        await query.edit_message_text(t(lang, "⚠️ No active communes. Try a different wilaya with /addprofile."))
         return ConversationHandler.END
 
     state["_communes"] = active
@@ -230,7 +233,7 @@ async def ap_on_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         rows.append(row)
 
     await query.edit_message_text(
-        "Step 7/9 — Select the *Commune*:",
+        t(lang, "Step 7/9 — Select the *Commune*:"),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -239,6 +242,7 @@ async def ap_on_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def ap_on_commune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    lang = await get_lang(context, update.effective_user.id)
     if not query:
         return AP_COMMUNE
     await query.answer()
@@ -260,8 +264,7 @@ async def ap_on_commune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         for code, label in _PAYMENT_METHODS.items()
     ]
     await query.edit_message_text(
-        f"✅ Commune *{commune_name}* selected.\n\n"
-        "Step 8/9 — Select a *payment method*:",
+        t(lang, "✅ Commune *{commune_name}* selected.\n\nStep 8/9 — Select a *payment method*:").format(commune_name=commune_name),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(pm_rows),
     )
@@ -270,13 +273,14 @@ async def ap_on_commune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def ap_on_payment_method(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    lang = await get_lang(context, update.effective_user.id)
     if not query:
         return AP_PAYMENT_METHOD
     await query.answer()
 
     method = (query.data or "").split(":", 1)[1]
     if method not in _PAYMENT_METHODS:
-        await query.edit_message_text("❌ Invalid payment method. Try again.")
+        await query.edit_message_text(t(lang, "❌ Invalid payment method. Try again."))
         return AP_PAYMENT_METHOD
 
     state = _ap_state(context)
@@ -284,8 +288,7 @@ async def ap_on_payment_method(update: Update, context: ContextTypes.DEFAULT_TYP
 
     label = _PAYMENT_METHODS[method]
     await query.edit_message_text(
-        f"✅ Payment method *{label}* selected.\n\n"
-        "Step 9/9 — Enter an *email* (optional, send `-` to skip):",
+        t(lang, "✅ Payment method *{label}* selected.\n\nStep 9/9 — Enter an *email* (optional, send `-` to skip):").format(label=label),
         parse_mode="Markdown",
     )
     return AP_EMAIL
@@ -293,6 +296,7 @@ async def ap_on_payment_method(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
+    lang = await get_lang(context, update.effective_user.id)
     state = _ap_state(context)
 
     # Handle common skip keywords
@@ -300,8 +304,7 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         state["email"] = ""
     elif not _validate_email(text):
         await update.message.reply_text(
-            "❌ *Invalid email format.*\n\n"
-            "Please enter a valid email address or send `-` to skip:",
+            t(lang, "❌ *Invalid email format.*\n\nPlease enter a valid email address or send `-` to skip:"),
             parse_mode="Markdown"
         )
         return AP_EMAIL
@@ -316,7 +319,7 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         profile_id = await profile_db.add_profile(db_path, user_id, state)
     except Exception as exc:
         logger.exception("Failed to save profile")
-        await update.message.reply_text(f"❌ Failed to save profile: {exc}")
+        await update.message.reply_text(t(lang, "❌ Failed to save profile: {exc}").format(exc=exc))
         return ConversationHandler.END
 
     # Clean up temp state
@@ -326,14 +329,15 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     pm_label = _PAYMENT_METHODS.get(state.get('payment_method', 'CASH'), state.get('payment_method', 'CASH'))
     await update.message.reply_text(
-        f"🎉 Profile #{profile_id} ('{state.get('name', '')}') saved!\n\n"
-        f"NIN: `{state['nin'][:4]}…{state['nin'][-4:]}`\n"
-        f"Wilaya: {state.get('wilaya_name', state['wilaya_id'])}\n"
-        f"Commune: {state.get('commune_name', state['commune_code'])}\n"
-        f"Payment: {pm_label}\n"
-        f"Status: {status}\n\n"
-        "It will be auto-registered when quota opens.\n"
-        "Use /profiles to view all your profiles.",
+        t(lang, "🎉 Profile #{profile_id} ('{name}') saved!\n\nNIN: `{nin}`\nWilaya: {wilaya}\nCommune: {commune}\nPayment: {pm_label}\nStatus: {status}\n\nIt will be auto-registered when quota opens.\nUse /profiles to view all your profiles.").format(
+            profile_id=profile_id,
+            name=state.get('name', ''),
+            nin=f"{state['nin'][:4]}…{state['nin'][-4:]}",
+            wilaya=state.get('wilaya_name', state['wilaya_id']),
+            commune=state.get('commune_name', state['commune_code']),
+            pm_label=pm_label,
+            status=status
+        ),
         parse_mode="Markdown",
     )
     await _revalidate_and_warn(update, context, profile_id)
@@ -342,7 +346,8 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def ap_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("add_profile", None)
-    await update.effective_message.reply_text("Profile creation cancelled.")
+    lang = await get_lang(context, update.effective_user.id)
+    await update.effective_message.reply_text(t(lang, "Profile creation cancelled."))
     return ConversationHandler.END
 
 
@@ -386,7 +391,7 @@ async def list_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    lines = ["📋 *Your Profiles*\n"]
+    lines = [t(lang, "📋 *Your Profiles*\n")]
     for i, p in enumerate(profiles, 1):
         status_icon = {"pending": "🟡", "pre-registered": "🔵", "registering": "🔄", "registered": "✅", "ordered": "🐑", "failed": "❌"}.get(p.status, "❓")
         masked_nin = f"{p.nin[:4]}…{p.nin[-4:]}"
@@ -395,7 +400,7 @@ async def list_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"   NIN: `{masked_nin}` | Phone: `{p.phone}`\n"
             f"   {p.wilaya_name} → {p.commune_name}\n"
         )
-    lines.append("_Use /editprofile, /deleteprofile, /reorder to manage._")
+    lines.append(t(lang, "_Use /editprofile, /deleteprofile, /reorder to manage._"))
     await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -637,15 +642,15 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Validate based on field
     if field == "name":
         if not text:
-            await update.message.reply_text("❌ Name cannot be empty. Try again:")
+            await update.message.reply_text(t(lang, "❌ Name cannot be empty. Try again:"))
             return EDIT_WAITING_VALUE
     elif field == "nin":
         if not text.isdigit() or len(text) != 18:
-            await update.message.reply_text("❌ NIN must be 18 digits. Try again:")
+            await update.message.reply_text(t(lang, "❌ NIN must be 18 digits. Try again:"))
             return EDIT_WAITING_VALUE
     elif field == "cnibe":
         if not text.isdigit() or len(text) != 9:
-            await update.message.reply_text("❌ CNIBE must be 9 digits. Try again:")
+            await update.message.reply_text(t(lang, "❌ CNIBE must be 9 digits. Try again:"))
             return EDIT_WAITING_VALUE
     elif field == "phone":
         if not text.isdigit() or len(text) != 10 or not text.startswith("0"):
@@ -655,7 +660,7 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         errors = _validate_password(text)
         if errors:
             bullet_list = "\n".join(f"  • {e}" for e in errors)
-            await update.message.reply_text(f"❌ Invalid password:\n{bullet_list}\n\nTry again:")
+            await update.message.reply_text(t(lang, "❌ Invalid password:\n{bullet_list}\n\nTry again:").format(bullet_list=bullet_list))
             return EDIT_WAITING_VALUE
     elif field == "email":
         if text.lower() in ("-", "skip", "none", "aucun", "no", "لا"):
