@@ -45,7 +45,7 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
   - **Non-Blocking Notifications**: Telegram broadcasts are now backgrounded (`asyncio.create_task`), ensuring the quota monitor never stalls while waiting for the Telegram API.
   - **Strict Network Timeouts**: Enforced mandatory 10s total timeouts on all `httpx` requests to prevent hung connections from blocking the scheduler.
   - **Execution Analytics**: Added high-resolution performance tracking for every poll cycle to monitor system health and response times.
-  - **Job Coalescing**: Configured APScheduler to handle missed or overlapping intervals gracefully, ensuring the most recent quota check is always prioritized.
+  - **Job Coalescing & Grace Periods**: Configured APScheduler to handle missed or overlapping intervals gracefully. Implemented generous **misfire grace periods** (up to 24h) for critical catch-up tasks, ensuring no administrative job is skipped due to startup delays or temporary system load.
 - **Advanced Proxy SSL Resilience**: Implemented a specialized SSL context builder for all proxy-based connections. This specifically resolves `[SSL] record layer failure` errors by allowing TLS 1.2+ negotiation and utilizing the `DEFAULT` OpenSSL cipher string, ensuring stable connectivity through complex residential proxy tunnels like Databay.
 
 ### Prerequisites

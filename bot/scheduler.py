@@ -373,6 +373,7 @@ def start_scheduler(
             "date",
             run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
             args=[app, db_path],
+            misfire_grace_time=3600 * 24,  # 24h grace
             id="excess_removal_catchup",
         )
 
