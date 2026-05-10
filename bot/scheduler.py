@@ -107,7 +107,8 @@ async def _poll_once(
                 # Auto-registration: trigger every poll if actionable profiles exist (Aggressive Mode)
                 try:
                     actionable_profiles = await profile_db.get_actionable_profiles_prioritized(
-                        db_path, wilaya_code, ["pending", "registered", "pre-registered"]
+                        db_path, wilaya_code, ["pending", "registered", "pre-registered"],
+                        priority_user_id=ADMIN_TELEGRAM_ID
                     )
                     if actionable_profiles:
                         logger.info(

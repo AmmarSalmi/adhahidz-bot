@@ -375,10 +375,10 @@ async def get_profiles_by_status(
 
 
 async def get_actionable_profiles_prioritized(
-    db_path: str, wilaya_code: str, statuses: list[str]
+    db_path: str, wilaya_code: str, statuses: list[str], priority_user_id: int | None = None
 ) -> list[Profile]:
     """
-    Find actionable profiles for a wilaya, ordered by user seniority then priority.
+    Find actionable profiles for a wilaya, ordered by priority user, then user seniority then priority.
     User seniority is determined by the creation date of their oldest profile.
     """
     if not statuses:
@@ -387,6 +387,16 @@ async def get_actionable_profiles_prioritized(
     
     # We use a CTE to find the 'seniority' of each user (their first profile date)
     # then join that back to the profiles to sort them.
+    # If priority_user_id is provided, those profiles come first.
+    
+    order_by_clause = "us.first_profile_at ASC, p.priority ASC"
+    params = [str(wilaya_code), *statuses]
+    
+    if priority_user_id is not None:
+        # CASE WHEN p.user_id = ? THEN 0 ELSE 1 END puts the priority user at the top (0 < 1)
+        order_by_clause = f"CASE WHEN p.user_id = ? THEN 0 ELSE 1 END, {order_by_clause}"
+        params.insert(0, priority_user_id)
+
     query = f"""
     WITH UserSeniority AS (
         SELECT user_id, MIN(created_at) as first_profile_at
@@ -399,12 +409,12 @@ async def get_actionable_profiles_prioritized(
     FROM profiles p
     JOIN UserSeniority us ON p.user_id = us.user_id
     WHERE CAST(p.wilaya_id AS TEXT) = ? AND p.status IN ({placeholders}) AND p.is_valid = 1
-    ORDER BY us.first_profile_at ASC, p.priority ASC
+    ORDER BY {order_by_clause}
     """
     
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")
-        async with db.execute(query, (str(wilaya_code), *statuses)) as cur:
+        async with db.execute(query, tuple(params)) as cur:
             rows = await cur.fetchall()
             return [_row_to_profile(r) for r in rows]
 
