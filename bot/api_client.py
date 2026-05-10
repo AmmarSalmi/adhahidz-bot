@@ -157,7 +157,7 @@ class QuotaApiClient:
     def __init__(self, base_url: str, api_key: str | None = None, timeout_s: float = 10.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key.strip() if api_key else None
-        self._timeout = timeout_s
+        self._timeout = 30.0  # Increased default timeout
 
         # Some public endpoints behave differently without a browser-like UA/Referer.
         headers: dict[str, str] = {
@@ -181,13 +181,11 @@ class QuotaApiClient:
             follow_redirects=True,
         )
 
-    def create_session(self, proxy_url: str | None = None) -> httpx.AsyncClient:
+    def create_session(self, proxy_url: str | None = None, timeout_s: float | None = None) -> httpx.AsyncClient:
         """Create an isolated HTTP client for user-specific operations.
-
-        Each call returns a NEW client with its own cookie jar, preventing
-        session/cookie bleed between different Telegram users.  The caller
-        is responsible for closing the client when done.
+        ...
         """
+        timeout = timeout_s if timeout_s is not None else self._timeout
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers={
@@ -196,11 +194,11 @@ class QuotaApiClient:
                 "Referer": "https://adhahi.dz/register",
             },
             timeout=httpx.Timeout(
-                timeout=self._timeout,
-                connect=5.0,
-                read=self._timeout,
-                write=5.0,
-                pool=5.0
+                timeout=timeout,
+                connect=10.0,  # Increased connect timeout
+                read=timeout,
+                write=10.0,
+                pool=10.0
             ),
             follow_redirects=True,
             proxy=proxy_url,

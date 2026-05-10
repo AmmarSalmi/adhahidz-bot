@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS admin_inbox (
   created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
   resolved_at TEXT
 );
+CREATE TABLE IF NOT EXISTS sync_history (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type  TEXT    NOT NULL, -- 'order_found', 'order_blocked'
+  profile_id  INTEGER,
+  user_id     INTEGER,
+  details     TEXT,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -472,3 +480,16 @@ async def get_all_user_ids(db_path: str) -> list[int]:
         async with db.execute(query) as cur:
             rows = await cur.fetchall()
             return [int(r[0]) for r in rows]
+
+async def add_sync_event(db_path: str, event_type: str, profile_id: int | None = None, user_id: int | None = None, details: str | None = None) -> None:
+    """Record a sync event for analytics."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute(
+                "INSERT INTO sync_history (event_type, profile_id, user_id, details) VALUES (?, ?, ?, ?)",
+                (event_type, profile_id, user_id, details),
+            )
+            await db.commit()
+
+    await _with_retries(_op)

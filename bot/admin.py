@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 from datetime import datetime, timedelta, timezone
 
 import re
@@ -203,6 +204,13 @@ async def on_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     lines.append(f"🕐 Profiles created today: *{stats['profiles_today']}*")
     lines.append(f"📅 Profiles created this week: *{stats['profiles_week']}*")
 
+    sync_stats = stats.get("sync_stats", {})
+    if sync_stats:
+        lines.append("")
+        lines.append("🔄 *Order Sync History:*")
+        lines.append(f"  • Orders Found: *{sync_stats.get('order_found', 0)}*")
+        lines.append(f"  • Blocked Users (with Orders): *{sync_stats.get('order_blocked', 0)}*")
+
     if stats.get("recent_history"):
         lines.append("")
         lines.append("*Recent Quota Events (last 10):*")
@@ -255,6 +263,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
     
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("🔄 Sync Active Orders", callback_data="admin:sync_orders")],
             [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
             [InlineKeyboardButton("🤫 Silent Force Check", callback_data="admin:force_check:silent")],
             [InlineKeyboardButton("🆔 Check Profile by ID", callback_data="admin:check_profile_start")],
@@ -1006,6 +1015,12 @@ async def _gather_stats(db_path: str) -> dict:
         ) as cur:
             profiles_week = (await cur.fetchone())[0]
 
+        # Sync history stats
+        async with db.execute(
+            "SELECT event_type, COUNT(*) FROM sync_history GROUP BY event_type"
+        ) as cur:
+            sync_stats = {str(r[0]): int(r[1]) for r in await cur.fetchall()}
+
         # Recent quota events
         async with db.execute(
             "SELECT wilaya_code, event_type, timestamp FROM quota_history ORDER BY id DESC LIMIT 10"
@@ -1021,6 +1036,7 @@ async def _gather_stats(db_path: str) -> dict:
         "profiles_by_validity": profiles_by_validity,
         "profiles_today": profiles_today,
         "profiles_week": profiles_week,
+        "sync_stats": sync_stats,
         "recent_history": recent_history,
     }
 
@@ -1573,3 +1589,177 @@ async def _run_notify_invalid_nins_task(app, admin_id: int, db_path: str) -> Non
         await app.bot.send_message(chat_id=admin_id, text=report, parse_mode="Markdown")
     except Exception:
         logger.exception("Failed to send report to admin")
+
+
+async def on_admin_sync_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual trigger to sync 'registered' profiles with server orders."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    db_path = context.application.bot_data.get("db_path")
+    if not db_path:
+        await query.edit_message_text("❌ Database path not configured.")
+        return
+
+    # Run the sync in a background task
+    asyncio.create_task(_run_sync_orders_task(context.application, update.effective_user.id, db_path))
+    
+    await query.edit_message_text(
+        "🔄 *Order Sync Started*\n\n"
+        "I'm checking all 'registered' profiles for existing orders on the server. "
+        "This requires logging into each account and may take some time.\n\n"
+        "You will receive a summary report once finished.",
+        parse_mode="Markdown"
+    )
+
+async def _run_sync_orders_task(app, admin_id: int, db_path: str) -> None:
+    """Background task to reconcile profile statuses by checking 'my-orders' endpoint."""
+    logger.info("Starting manual sync of active orders...")
+    from .auto_registration import _fetch_and_solve_captcha
+    
+    api_client = app.bot_data.get("api_client")
+    if not api_client:
+        return
+
+    try:
+        # We only check 'registered' profiles because they are the ones likely to have an order
+        # that the bot didn't record yet (due to timeout or previous desync).
+        profiles = await profile_db.get_all_profiles_by_status(db_path, "registered")
+    except Exception as e:
+        logger.exception("Failed to get profiles for sync")
+        await app.bot.send_message(chat_id=admin_id, text=f"❌ *Sync Failed*\nCould not retrieve profiles: `{e}`", parse_mode="Markdown")
+        return
+
+    if not profiles:
+        await app.bot.send_message(chat_id=admin_id, text="ℹ️ *No 'registered' profiles found* to sync.", parse_mode="Markdown")
+        return
+
+    total = len(profiles)
+    found_orders = [] # list of profile info strings
+    blocked_users = [] # list of profile info strings
+    failed_logins = 0
+    
+    # Base headers for the sync requests
+    base_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8,fr;q=0.7",
+        "Origin": "https://adhahi.dz",
+        "Referer": "https://adhahi.dz/",
+    }
+
+    # 1. Determine if we should use proxy
+    from .proxy import get_proxy_url
+    use_proxy = app.bot_data.get("proxy_checkprof", False)
+    proxy_url = get_proxy_url() if use_proxy else None
+
+    for i, profile in enumerate(profiles):
+        try:
+            # Login first to get a token
+            async with api_client.create_session(proxy_url=proxy_url) as client:
+                # 1. CAPTCHA + Login
+                solved = await _fetch_and_solve_captcha(client, base_headers)
+                if not solved:
+                    failed_logins += 1
+                    continue
+                
+                captcha_id, answer, _ = solved
+                login_headers = {**base_headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
+                login_body = {
+                    "nin": profile.nin, 
+                    "password": profile.password, 
+                    "deviceInfo": "WEB_APP", 
+                    "sessionType": "WEB"
+                }
+                
+                resp = await client.post("/api/v1/citizens/login", json=login_body, headers=login_headers)
+                if resp.status_code != 200:
+                    failed_logins += 1
+                    continue
+                
+                token = resp.json().get("token")
+                if not token:
+                    failed_logins += 1
+                    continue
+                
+                # 2. Check my-orders endpoint
+                auth_headers = {**base_headers, "Authorization": f"Bearer {token}", "Referer": "https://adhahi.dz/user/confirmation"}
+                resp = await client.get("/api/v1/orders/my-orders?page=0&size=10", headers=auth_headers)
+                
+                if 200 <= resp.status_code < 300:
+                    data = resp.json()
+                    recent = data.get("recentOrders", [])
+                    # We check for PENDING orders. Completed or cancelled ones don't count for 'ordered' status.
+                    has_pending = any(o.get("status") == "PENDING" for o in recent)
+                    
+                    if has_pending:
+                        # 3. Mark as ordered in local DB
+                        await profile_db.set_profile_status(db_path, profile.id, "ordered")
+                        await db_mod.add_sync_event(db_path, 'order_found', profile.id, profile.user_id)
+                        prof_info = f"*{profile.name or profile.nin}* (Phone: `{profile.phone}`)"
+                        found_orders.append(prof_info)
+                        
+                        # 4. Notify user with localized congratulations and credentials
+                        try:
+                            lang = await db_mod.get_user_language(db_path, profile.user_id)
+                            # The localized message includes credentials for their convenience
+                            text = t(lang, "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`").format(
+                                name=profile.name or profile.nin,
+                                nin=profile.nin,
+                                password=profile.password
+                            )
+                            
+                            await safe_send_message(
+                                app.bot,
+                                user_id=profile.user_id,
+                                db_path=db_path,
+                                text=text,
+                                parse_mode="Markdown"
+                            )
+                        except Forbidden:
+                            # User blocked bot, we still note it for the admin report
+                            blocked_users.append(f"{profile.name or profile.nin} (User ID: `{profile.user_id}`)")
+                            await db_mod.add_sync_event(db_path, 'order_blocked', profile.id, profile.user_id)
+                        except Exception:
+                            logger.exception("Failed to notify user %s about secured order", profile.user_id)
+        except Exception:
+            logger.exception("Error syncing profile %s", profile.id)
+            failed_logins += 1
+        
+        # Human-like delay and progress logging
+        await asyncio.sleep(random.uniform(0.8, 2.0))
+        if (i+1) % 10 == 0:
+            logger.info("Order Sync progress: %d/%d checked...", i+1, total)
+
+    # Compile the final report for the admin
+    report_lines = [f"🔄 *Order Sync Complete*"]
+    report_lines.append(f"Profiles checked: *{total}*")
+    report_lines.append(f"Login/Captcha failures: *{failed_logins}*")
+    report_lines.append("")
+    
+    if found_orders:
+        report_lines.append(f"✅ *Orders Found & Flagged ({len(found_orders)}):*")
+        for o in found_orders:
+            report_lines.append(f"  • {o}")
+    else:
+        report_lines.append("ℹ️ No new orders found.")
+
+    if blocked_users:
+        report_lines.append("")
+        report_lines.append(f"🚫 *Orders Secured but Bot Blocked ({len(blocked_users)}):*")
+        report_lines.append("_(These profiles were not available to notify because users blocked the bot)_")
+        for u in blocked_users:
+            report_lines.append(f"  • {u}")
+
+    logger.info("Order sync task finished: %d checked, %d found, %d blocked", total, len(found_orders), len(blocked_users))
+
+    try:
+        await app.bot.send_message(chat_id=admin_id, text="\n".join(report_lines), parse_mode="Markdown")
+    except Exception:
+        logger.exception("Failed to send sync report to admin")

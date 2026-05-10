@@ -577,18 +577,21 @@ async def _process_registered_profiles(
 
             if outcome == "ordered" or outcome == "already_ordered":
                 await profile_db.set_profile_status(db_path, profile.id, "ordered")
-                lang = await get_user_language(db_path, user_id)
+                # Record for stats
+                await db_mod.add_sync_event(db_path, 'order_found', profile.id, profile.user_id)
                 
-                if outcome == "ordered":
-                    text = t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour order has been submitted successfully!")
-                else:
-                    text = t(lang, "🐑 *Order already active!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nI detected that this profile already has an active order. Status updated successfully.")
+                lang = await get_user_language(db_path, user_id)
+                text = t(lang, "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`").format(
+                    name=profile.name or masked,
+                    nin=profile.nin,
+                    password=profile.password
+                )
                 
                 await safe_send_message(
                     app.bot,
                     user_id=user_id,
                     db_path=db_path,
-                    text=text.format(name=profile.name or masked, phone=profile.phone),
+                    text=text,
                     parse_mode="Markdown",
                 )
             elif outcome == "order_fail":
@@ -703,18 +706,21 @@ async def _process_user_profiles(
                 masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
                 if l_outcome == "ordered" or l_outcome == "already_ordered":
                     await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
-                    lang = await get_user_language(db_path, user_id)
+                    # Record for stats
+                    await db_mod.add_sync_event(db_path, 'order_found', l_profile.id, user_id)
                     
-                    if l_outcome == "ordered":
-                        text = t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nAccount was already active; order was submitted successfully!")
-                    else:
-                        text = t(lang, "🐑 *Order already active!*\n\nProfile: *{name}*\nAccount was already active and an order was already found on server! Status updated.")
+                    lang = await get_user_language(db_path, user_id)
+                    text = t(lang, "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`").format(
+                        name=l_profile.name or masked,
+                        nin=l_profile.nin,
+                        password=l_profile.password
+                    )
                         
                     await safe_send_message(
                         app.bot,
                         user_id=user_id,
                         db_path=db_path,
-                        text=text.format(name=l_profile.name or masked),
+                        text=text,
                         parse_mode="Markdown",
                     )
                 else:
@@ -799,16 +805,22 @@ async def _process_user_profiles(
                         logger.info("Profile %s already registered (Phase 2). Switching to login flow.", profile.id)
                         await profile_db.set_profile_status(db_path, profile.id, "registered")
                         
-                        l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
-                        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
-                        if l_outcome == "ordered":
+                        if l_outcome == "ordered" or l_outcome == "already_ordered":
                             await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
+                            # Record for stats
+                            await db_mod.add_sync_event(db_path, 'order_found', l_profile.id, user_id)
+                            
                             lang = await get_user_language(db_path, user_id)
+                            text = t(lang, "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`").format(
+                                name=l_profile.name or masked,
+                                nin=l_profile.nin,
+                                password=l_profile.password
+                            )
                             await safe_send_message(
                                 app.bot,
                                 user_id=user_id,
                                 db_path=db_path,
-                                text=t(lang, "🐑 *Order placed!*\n\nProfile: *{name}*\nAccount was already active; order was submitted successfully!").format(name=l_profile.name or masked),
+                                text=text,
                                 parse_mode="Markdown",
                             )
                         else:
