@@ -34,6 +34,8 @@ from .proxy import get_proxy_url
 from .registration import (
     _extract_error_message,
     _get_http_client,
+    _build_headers,
+    _close_http_client,
 )
 from . import db as db_mod
 

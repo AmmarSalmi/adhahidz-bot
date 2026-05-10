@@ -18,7 +18,7 @@ from .admin import (
     on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy, 
     on_admin_proxy_submenu, on_admin_inbox, on_admin_inbox_view, 
     on_admin_inbox_resolve, on_admin_inbox_filter_level, on_admin_inbox_filter_status,
-    on_admin_inbox_filter_date, on_admin_force_check
+    on_admin_inbox_filter_date, on_admin_force_check, on_admin_purge_blockers
 )
 
 from .api_client import QuotaApiClient
@@ -268,6 +268,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_force_check, pattern=r"^admin:force_check(:silent)?$"))
     app.add_handler(CallbackQueryHandler(on_admin_stats, pattern=r"^admin:stats$"))
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"))
+    app.add_handler(CallbackQueryHandler(on_admin_purge_blockers, pattern=r"^admin:purge_blockers$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_restrict, pattern=r"^admin:toggle_restrict$"))
     app.add_handler(CallbackQueryHandler(on_admin_proxy_submenu, pattern=r"^admin:proxy_submenu$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:"))

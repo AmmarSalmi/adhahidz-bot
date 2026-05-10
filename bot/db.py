@@ -455,3 +455,20 @@ async def resolve_inbox_entry(db_path: str, entry_id: int) -> bool:
             return cur.rowcount > 0
 
     return bool(await _with_retries(_op))
+
+
+async def get_all_user_ids(db_path: str) -> list[int]:
+    """Return all unique user IDs across subscriptions, settings, and profiles."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        # Union all tables that contain user_id to find everyone the bot knows about
+        query = """
+        SELECT user_id FROM subscriptions
+        UNION
+        SELECT user_id FROM user_settings
+        UNION
+        SELECT user_id FROM profiles
+        """
+        async with db.execute(query) as cur:
+            rows = await cur.fetchall()
+            return [int(r[0]) for r in rows]

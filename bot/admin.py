@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 from deep_translator import GoogleTranslator
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, constants
 from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
@@ -258,6 +258,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
             [InlineKeyboardButton("🌐 Proxy Settings ⚙️", callback_data="admin:proxy_submenu")],
             [InlineKeyboardButton("⚙️ Set Concurrency Limit", callback_data="admin:set_concurrency")],
+            [InlineKeyboardButton("🧹 Purge Blocking Users", callback_data="admin:purge_blockers")],
             [InlineKeyboardButton("📥 Error/Warning Inbox", callback_data="admin:inbox:0")],
             [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
         ]
@@ -1270,3 +1271,101 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
             text=f"❌ *Force Check Failed*\n\nError: `{e}`", 
             parse_mode="Markdown"
         )
+
+
+async def on_admin_purge_blockers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual trigger to scan all users and delete those who blocked the bot."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    db_path = context.application.bot_data.get("db_path")
+    if not db_path:
+        await query.edit_message_text("❌ Database path not configured.")
+        return
+
+    # Run the purge in a background task to avoid blocking the UI
+    asyncio.create_task(_run_purge_task(context.application, update.effective_user.id, db_path))
+    
+    await query.edit_message_text(
+        "🧹 *Purge Started*\n\n"
+        "I'm scanning all users to detect and remove blockers. "
+        "This may take a while depending on the user count.\n\n"
+        "You will receive a summary report once finished.",
+        parse_mode="Markdown"
+    )
+
+
+async def _run_purge_task(app, admin_id: int, db_path: str) -> None:
+    """Background task to iterate over users and purge blockers."""
+    logger.info("Starting manual purge of blocking users...")
+    
+    try:
+        user_ids = await db_mod.get_all_user_ids(db_path)
+    except Exception as e:
+        logger.exception("Failed to get user IDs for purge")
+        await app.bot.send_message(chat_id=admin_id, text=f"❌ *Purge Failed*\nCould not retrieve user list: `{e}`", parse_mode="Markdown")
+        return
+
+    total = len(user_ids)
+    purged = 0
+    active = 0
+    
+    # Process users one by one
+    for i, user_id in enumerate(user_ids):
+        # Admin is always active
+        if user_id == admin_id:
+            active += 1
+            continue
+
+        is_blocked = False
+        try:
+            # We use send_chat_action as an invisible check.
+            # It returns Forbidden if the bot is blocked.
+            await app.bot.send_chat_action(chat_id=user_id, action=constants.ChatAction.TYPING)
+            active += 1
+        except Forbidden:
+            is_blocked = True
+        except Exception as e:
+            msg = str(e).lower()
+            # If the chat is gone or the user is invalid, we treat them as blockers to clean up
+            if any(err in msg for err in ["chat not found", "user not found", "peer_id_invalid", "bot was blocked"]):
+                is_blocked = True
+            else:
+                # Network error or temporary issue, skip this user
+                active += 1
+                continue
+
+        if is_blocked:
+            try:
+                # Reuse existing deletion logic
+                await db_mod.delete_user_data(db_path, user_id)
+                purged += 1
+            except Exception:
+                logger.info("Failed to delete data for user %s during purge", user_id)
+
+        # Periodic log update
+        if (i + 1) % 50 == 0:
+            logger.info("Purge progress: %d/%d checked...", i + 1, total)
+        
+        # Small delay to respect Telegram flood limits (approx 20-30 messages per second)
+        await asyncio.sleep(0.05)
+
+    report = (
+        "🧹 *Purge Complete*\n\n"
+        f"Total users checked: *{total}*\n"
+        f"Blocked and purged: *{purged}*\n"
+        f"Active users kept: *{active}*"
+    )
+    
+    logger.info("Purge complete: %d checked, %d purged, %d kept", total, purged, active)
+    
+    try:
+        await app.bot.send_message(chat_id=admin_id, text=report, parse_mode="Markdown")
+    except Exception:
+        logger.exception("Failed to send purge report to admin")
