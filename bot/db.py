@@ -111,6 +111,7 @@ async def init_db(db_path: str) -> None:
         for migration in [
             "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE profiles ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'CASH';",
+            "ALTER TABLE admin_inbox ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0;",
         ]:
             try:
                 await db.execute(migration)

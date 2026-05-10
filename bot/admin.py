@@ -257,29 +257,72 @@ async def on_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ---------------------------------------------------------------------------
 
 def _admin_keyboard(context) -> InlineKeyboardMarkup:
-    """Build the admin panel keyboard with current states."""
-    restricted = is_restricted_mode(context)
-    
-    toggle_restrict = "🔓 Unrestrict Users" if restricted else "🔒 Restrict Users"
-    
+    """Build the root admin panel keyboard."""
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🔄 Sync Active Orders", callback_data="admin:sync_orders")],
-            [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
-            [InlineKeyboardButton("🤫 Silent Force Check", callback_data="admin:force_check:silent")],
-            [InlineKeyboardButton("🆔 Check Profile by ID", callback_data="admin:check_profile_start")],
-            [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
-            [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
-            [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
-            [InlineKeyboardButton("🌐 Proxy Settings ⚙️", callback_data="admin:proxy_submenu")],
-            [InlineKeyboardButton("⚙️ Set Concurrency Limit", callback_data="admin:set_concurrency")],
-            [InlineKeyboardButton("🧹 Purge Blocking Users", callback_data="admin:purge_blockers")],
-            [InlineKeyboardButton("📢 Notify Invalid NINs", callback_data="admin:notify_invalid_nins")],
-            [InlineKeyboardButton("📥 Error/Warning Inbox", callback_data="admin:inbox:0")],
-            [InlineKeyboardButton("📨 Inbox Settings ⚙️", callback_data="admin:inbox_settings")],
-            [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
+            [InlineKeyboardButton("👤 Users Control", callback_data="admin:users_submenu")],
+            [InlineKeyboardButton("📝 Profiles Control", callback_data="admin:profiles_submenu")],
+            [InlineKeyboardButton("🌐 Infrastructure & Proxy", callback_data="admin:infra_submenu")],
+            [InlineKeyboardButton("📥 Admin Inbox", callback_data="admin:inbox_submenu")],
         ]
     )
+
+
+def _users_submenu_keyboard(context) -> InlineKeyboardMarkup:
+    """Build the users control submenu keyboard."""
+    restricted = is_restricted_mode(context)
+    toggle_restrict = "🔓 Unrestrict Users" if restricted else "🔒 Restrict Users"
+    
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
+        [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
+        [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
+        [InlineKeyboardButton("🧹 Purge Blocking Users", callback_data="admin:purge_blockers")],
+        [InlineKeyboardButton("📢 Notify Invalid NINs", callback_data="admin:notify_invalid_nins")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
+    ])
+
+
+def _profiles_submenu_keyboard(context) -> InlineKeyboardMarkup:
+    """Build the profiles control submenu keyboard."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Sync Active Orders", callback_data="admin:sync_orders")],
+        [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
+        [InlineKeyboardButton("🤫 Silent Force Check", callback_data="admin:force_check:silent")],
+        [InlineKeyboardButton("🆔 Check Profile by ID", callback_data="admin:check_profile_start")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
+    ])
+
+
+def _infra_submenu_keyboard(context) -> InlineKeyboardMarkup:
+    """Build the infrastructure (proxy & concurrency) submenu keyboard."""
+    p_wilaya = context.application.bot_data.get("proxy_wilaya", False)
+    p_autoreg = context.application.bot_data.get("proxy_autoreg", False)
+    p_checkprof = context.application.bot_data.get("proxy_checkprof", False)
+    
+    t_wilaya = f"📊 Proxy Quota: {'✅' if p_wilaya else '❌'}"
+    t_autoreg = f"🤖 Proxy Auto-Reg: {'✅' if p_autoreg else '❌'}"
+    t_checkprof = f"🔍 Proxy Prof-Check: {'✅' if p_checkprof else '❌'}"
+    
+    curr = context.application.bot_data.get("max_concurrent_sessions", 50)
+    
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t_wilaya, callback_data="admin:toggle_proxy:wilaya")],
+        [InlineKeyboardButton(t_autoreg, callback_data="admin:toggle_proxy:autoreg")],
+        [InlineKeyboardButton(t_checkprof, callback_data="admin:toggle_proxy:checkprof")],
+        [InlineKeyboardButton(f"⚙️ Concurrency Limit ({curr})", callback_data="admin:set_concurrency")],
+        [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
+    ])
+
+
+def _inbox_submenu_keyboard(context) -> InlineKeyboardMarkup:
+    """Build the admin inbox submenu keyboard."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 View Error/Warning Inbox", callback_data="admin:inbox:0")],
+        [InlineKeyboardButton("📨 Inbox Settings ⚙️", callback_data="admin:inbox_settings")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
+    ])
 
 
 def _proxy_submenu_keyboard(context) -> InlineKeyboardMarkup:
@@ -304,6 +347,90 @@ def _proxy_submenu_keyboard(context) -> InlineKeyboardMarkup:
 # Callback: admin:toggle_restrict — flip restricted mode on/off
 # ---------------------------------------------------------------------------
 
+async def on_admin_users_submenu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show the users control submenu."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    keyboard = _users_submenu_keyboard(context)
+    await query.edit_message_text(
+        "👤 *Users Control*\n\nManage user access, statistics, and broadcasts.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_profiles_submenu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show the profiles control submenu."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    keyboard = _profiles_submenu_keyboard(context)
+    await query.edit_message_text(
+        "📝 *Profiles Control*\n\nManage registration profiles and sync operations.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_infra_submenu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show the infrastructure settings submenu."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    keyboard = _infra_submenu_keyboard(context)
+    await query.edit_message_text(
+        "🌐 *Infrastructure & Performance*\n\nConfigure proxy usage and system concurrency limits.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_inbox_submenu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show the admin inbox submenu."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    keyboard = _inbox_submenu_keyboard(context)
+    await query.edit_message_text(
+        "📥 *Admin Inbox Management*\n\nMonitor system logs, errors, and configure notification reporting.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
 async def on_admin_toggle_restrict(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -326,9 +453,9 @@ async def on_admin_toggle_restrict(
     status_emoji = "🔒" if new_state else "🔓"
     status_text = "ON — users are restricted" if new_state else "OFF — users have full access"
 
-    keyboard = _admin_keyboard(context)
+    keyboard = _users_submenu_keyboard(context)
     await query.edit_message_text(
-        f"👑 *Admin Panel*\n\n"
+        f"👤 *Users Control*\n\n"
         f"{status_emoji} Restricted mode: *{status_text}*",
         reply_markup=keyboard,
         parse_mode="Markdown",
@@ -338,23 +465,8 @@ async def on_admin_toggle_restrict(
 async def on_admin_proxy_submenu(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Show the proxy settings submenu."""
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    if not is_admin(update):
-        await query.edit_message_text("⛔ Access denied.")
-        return
-
-    keyboard = _proxy_submenu_keyboard(context)
-    await query.edit_message_text(
-        "🌐 *Proxy Management*\n\n"
-        "Configure where the Databay residential proxy should be used:",
-        reply_markup=keyboard,
-        parse_mode="Markdown",
-    )
+    """Show the proxy settings submenu (legacy, redirects to infra)."""
+    return await on_admin_infra_submenu(update, context)
 
 
 async def on_admin_toggle_proxy(
@@ -400,9 +512,9 @@ async def on_admin_toggle_proxy(
         )
         return AWAIT_WILAYA_INTERVAL
 
-    keyboard = _proxy_submenu_keyboard(context)
+    keyboard = _infra_submenu_keyboard(context)
     await query.edit_message_text(
-        "🌐 *Proxy Management*\n\n"
+        "🌐 *Infrastructure & Performance*\n\n"
         "Settings updated successfully.",
         reply_markup=keyboard,
         parse_mode="Markdown",
@@ -512,9 +624,9 @@ async def on_admin_proxy_cancel(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     if query:
         await query.answer()
-        keyboard = _proxy_submenu_keyboard(context)
+        keyboard = _infra_submenu_keyboard(context)
         await query.edit_message_text(
-            "🌐 *Proxy Management*\n\n"
+            "🌐 *Infrastructure & Performance*\n\n"
             "Interval update cancelled.",
             reply_markup=keyboard,
             parse_mode="Markdown",
@@ -1133,7 +1245,7 @@ async def on_admin_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Clear Inbox button
     buttons.append([InlineKeyboardButton("🧹 Clear Inbox (Soft Delete)", callback_data="admin:inbox_clear")])
 
-    buttons.append([InlineKeyboardButton("⬅️ Back to Admin Panel", callback_data="admin:back")])
+    buttons.append([InlineKeyboardButton("⬅️ Back to Inbox Menu", callback_data="admin:inbox_submenu")])
 
     await query.edit_message_text(
         text,
@@ -1321,7 +1433,7 @@ async def on_admin_inbox_settings(update: Update, context: ContextTypes.DEFAULT_
         buttons.append([InlineKeyboardButton("🔔 Enable Real-time Alerts", callback_data="admin:inbox_unmute")])
         buttons.append([InlineKeyboardButton("⏱️ Change Report Interval", callback_data="admin:inbox_change_interval")])
     
-    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="admin:back")])
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="admin:inbox_submenu")])
 
     await query.edit_message_text(
         text,

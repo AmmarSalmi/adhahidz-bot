@@ -22,7 +22,8 @@ from .admin import (
     on_admin_inbox_filter_date, on_admin_force_check, on_admin_purge_blockers,
     on_admin_notify_invalid_nins, on_admin_sync_orders, on_admin_inbox_mute_confirm,
     on_admin_inbox_change_interval, on_admin_inbox_settings, on_admin_inbox_unmute,
-    on_admin_inbox_clear
+    on_admin_inbox_clear, on_admin_users_submenu, on_admin_profiles_submenu,
+    on_admin_infra_submenu, on_admin_inbox_submenu
 )
 
 from .api_client import QuotaApiClient
@@ -309,6 +310,10 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_inbox_clear, pattern=r"^admin:inbox_clear$"))
     app.add_handler(CallbackQueryHandler(on_admin_notify_invalid_nins, pattern=r"^admin:notify_invalid_nins$"))
     app.add_handler(CallbackQueryHandler(on_admin_sync_orders, pattern=r"^admin:sync_orders$"))
+    app.add_handler(CallbackQueryHandler(on_admin_users_submenu, pattern=r"^admin:users_submenu$"))
+    app.add_handler(CallbackQueryHandler(on_admin_profiles_submenu, pattern=r"^admin:profiles_submenu$"))
+    app.add_handler(CallbackQueryHandler(on_admin_infra_submenu, pattern=r"^admin:infra_submenu$"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox_submenu, pattern=r"^admin:inbox_submenu$"))
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))
