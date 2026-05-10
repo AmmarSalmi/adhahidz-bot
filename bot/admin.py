@@ -31,8 +31,9 @@ from telegram.ext import (
 )
 from telegram.error import Forbidden
 
-from . import db as db_mod
-from .proxy import get_proxy_url
+from .profile_handlers import _validate_email
+from . import profile_db, db as db_mod
+from .registration import _validate_password
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
     
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
             [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
             [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
             [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
@@ -1112,3 +1114,93 @@ async def on_admin_inbox_resolve(update: Update, context: ContextTypes.DEFAULT_T
     
     # Refresh view
     await on_admin_inbox_view(update, context)
+
+
+async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Scan all profiles for invalid data, fix emails, and notify users."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    db_path: str = context.application.bot_data.get("db_path", "")
+    await query.edit_message_text("⏳ Scanning all profiles in database...")
+
+    try:
+        user_profiles = await profile_db.get_all_profiles_grouped_by_user(db_path)
+    except Exception as e:
+        logger.exception("Failed to get profiles for check")
+        await query.edit_message_text(f"❌ Database error: {e}")
+        return
+
+    checked_count = 0
+    fixed_emails = 0
+    invalid_others = 0
+    notifications_sent = 0
+    
+    # We'll group notifications by user to avoid spamming
+    for user_id, profiles in user_profiles.items():
+        user_fixed_count = 0
+        user_invalid_fields = [] # [(profile_name, field)]
+        
+        for p in profiles:
+            checked_count += 1
+            is_valid_email = _validate_email(p.email)
+            
+            # Check other fields too
+            other_errors = []
+            if not p.nin.isdigit() or len(p.nin) != 18:
+                other_errors.append("NIN")
+            if not p.cnibe.isdigit() or len(p.cnibe) != 9:
+                other_errors.append("CNIBE")
+            if not p.phone.isdigit() or len(p.phone) != 10 or not p.phone.startswith("0"):
+                other_errors.append("Phone")
+            
+            pw_errs = _validate_password(p.password)
+            if pw_errs:
+                other_errors.append("Password")
+            
+            if other_errors:
+                invalid_others += 1
+                for field in other_errors:
+                    user_invalid_fields.append((p.name or f"#{p.id}", field))
+
+            if not is_valid_email:
+                # Fix it!
+                try:
+                    await profile_db.update_profile_field(db_path, p.id, user_id, "email", "")
+                    fixed_emails += 1
+                    user_fixed_count += 1
+                except Exception:
+                    logger.exception("Failed to fix email for profile %s", p.id)
+
+        # Notify user if we fixed something
+        if user_fixed_count > 0:
+            msg = (
+                "⚠️ *Profile Maintenance Notification*\n\n"
+                "A routine check of our database detected that some of your profiles had an **invalid email format**.\n\n"
+                "To ensure your profiles remain compatible with the registration system, we have automatically set the invalid emails to **empty** (as they are optional).\n\n"
+                f"Number of profiles updated: *{user_fixed_count}*\n\n"
+                "If you wish to add a valid email, please use /profiles to edit your profile(s)."
+            )
+            try:
+                await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="Markdown")
+                notifications_sent += 1
+                # Small delay to avoid hitting rate limits if there are many users
+                await asyncio.sleep(0.05) 
+            except Exception as e:
+                logger.warning("Could not notify user %s: %s", user_id, e)
+
+    await query.edit_message_text(
+        "✅ *Database Check Complete*\n\n"
+        f"Profiles checked: `{checked_count}`\n"
+        f"Invalid emails fixed: `{fixed_emails}`\n"
+        f"Other invalid fields detected: `{invalid_others}` (NIN/CNIBE/PW)\n"
+        f"User notifications sent: `{notifications_sent}`",
+        reply_markup=_admin_keyboard(context),
+        parse_mode="Markdown"
+    )
