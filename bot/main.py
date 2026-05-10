@@ -46,6 +46,7 @@ from .registration import build_registration_handler
 from .scheduler import start_scheduler
 from .menu import menu_command, on_menu_nav, on_menu_cmd, handle_reply_menu
 from .logging_handler import AdminInboxHandler
+from .proxy import get_proxy_url
 
 # Global reference to the inbox handler to update it later
 _inbox_handler: AdminInboxHandler | None = None
@@ -70,14 +71,14 @@ def _configure_logging() -> None:
     logging.getLogger().addHandler(_inbox_handler)
 
 
-async def _load_wilayas(api: QuotaApiClient, db_path: str | None = None) -> list[tuple[str, str]]:
+async def _load_wilayas(api: QuotaApiClient, db_path: str | None = None, proxy_url: str | None = None) -> list[tuple[str, str]]:
     from . import db as db_mod
     if db_path:
         cached = await db_mod.get_cached_wilayas(db_path)
         if cached:
             return cached
 
-    statuses = await api.fetch_wilaya_quotas()
+    statuses = await api.fetch_wilaya_quotas(proxy_url=proxy_url)
     items = [(s.wilaya_code, s.wilaya_name) for s in statuses.values()]
     items.sort(key=lambda t: (t[0], t[1]))
     
@@ -107,7 +108,12 @@ async def _post_init(app: Application) -> None:
     if reset_count > 0:
         logger.info("Reset %d profiles from 'registering' to 'pending' at startup.", reset_count)
 
-    api = QuotaApiClient(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
+    api = QuotaApiClient(
+        base_url=base_url, 
+        api_key=api_key, 
+        timeout_s=timeout_s, 
+        proxy_url=get_proxy_url()
+    )
     from .admin import ADMIN_TELEGRAM_ID
     app.bot_data["db_path"] = db_path
     app.bot_data["api_client"] = api
@@ -132,8 +138,10 @@ async def _post_init(app: Application) -> None:
     app.bot_data["proxy_autoreg"] = os.getenv("PROXY_AUTOREG", "false").lower() == "true"
     app.bot_data["proxy_checkprof"] = os.getenv("PROXY_CHECKPROF", "false").lower() == "true"
 
+    load_proxy = get_proxy_url() if app.bot_data["proxy_wilaya"] else None
+
     try:
-        app.bot_data["wilayas"] = await _load_wilayas(api, db_path)
+        app.bot_data["wilayas"] = await _load_wilayas(api, db_path, proxy_url=load_proxy)
     except Exception:
         logger.exception("Failed to load wilaya list from API at startup")
         app.bot_data["wilayas"] = []

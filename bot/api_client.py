@@ -154,10 +154,11 @@ def parse_wilaya_quotas(payload: Any) -> list[QuotaStatus]:
 
 
 class QuotaApiClient:
-    def __init__(self, base_url: str, api_key: str | None = None, timeout_s: float = 10.0) -> None:
+    def __init__(self, base_url: str, api_key: str | None = None, timeout_s: float = 10.0, proxy_url: str | None = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key.strip() if api_key else None
         self._timeout = 30.0  # Increased default timeout
+        self._default_proxy = proxy_url
 
         # Some public endpoints behave differently without a browser-like UA/Referer.
         headers: dict[str, str] = {
@@ -173,12 +174,13 @@ class QuotaApiClient:
             headers=headers,
             timeout=httpx.Timeout(
                 timeout=self._timeout,
-                connect=5.0,
+                connect=15.0,  # Increased connect timeout
                 read=self._timeout,
-                write=5.0,
-                pool=5.0
+                write=10.0,
+                pool=10.0
             ),
             follow_redirects=True,
+            proxy=self._default_proxy,
         )
 
     def create_session(self, proxy_url: str | None = None, timeout_s: float | None = None) -> httpx.AsyncClient:
@@ -195,13 +197,13 @@ class QuotaApiClient:
             },
             timeout=httpx.Timeout(
                 timeout=timeout,
-                connect=10.0,  # Increased connect timeout
+                connect=15.0,  # Increased connect timeout
                 read=timeout,
                 write=10.0,
                 pool=10.0
             ),
             follow_redirects=True,
-            proxy=proxy_url,
+            proxy=proxy_url if proxy_url is not None else self._default_proxy,
         )
 
     async def aclose(self) -> None:

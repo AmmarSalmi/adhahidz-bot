@@ -90,7 +90,14 @@ def _get_http_client(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
     if api is None:
         raise RuntimeError("API client not initialized")
 
-    client = api.create_session()
+    from .proxy import get_proxy_url
+    use_proxy = context.application.bot_data.get("proxy_autoreg", False)
+    # Using NIN as session_id for sticky proxy sessions if available in reg state
+    state = context.user_data.get("reg", {})
+    session_id = state.get("nin")
+    proxy_url = get_proxy_url(session_id=session_id) if use_proxy else None
+
+    client = api.create_session(proxy_url=proxy_url)
     context.user_data["_reg_client"] = client
     return client
 

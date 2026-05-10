@@ -73,8 +73,12 @@ async def _ensure_wilayas_loaded(context: ContextTypes.DEFAULT_TYPE) -> list[tup
     if not api:
         return []
 
+    from .proxy import get_proxy_url
+    use_proxy = context.application.bot_data.get("proxy_wilaya", False)
+    proxy_url = get_proxy_url() if use_proxy else None
+
     try:
-        statuses = await api.fetch_wilaya_quotas()
+        statuses = await api.fetch_wilaya_quotas(proxy_url=proxy_url)
         items = [(s.wilaya_code, s.wilaya_name) for s in statuses.values()]
         items.sort(key=lambda t: (t[0], t[1]))
         context.application.bot_data["wilayas"] = items
