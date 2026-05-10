@@ -797,20 +797,21 @@ def build_registration_handler() -> ConversationHandler:
 
 from . import profile_db
 
-async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: profile_db.Profile, proxy_url: str | None = None) -> tuple[str, str, int]:
-    """Returns (status, status_message, http_code). status is 'pre-registered', 'registered', 'pending', or 'error'."""
-    # We create a temporary session for this check if a proxy is provided to avoid 
-    # dirtying the persistent user session or to ensure the proxy is applied.
-    if proxy_url:
-        api = context.application.bot_data.get("api_client")
-        client = api.create_session(proxy_url=proxy_url)
-        should_close = True
-    else:
-        client = _get_http_client(context)
-        should_close = False
+async def check_profile_status(
+    api_client: Any,
+    profile: profile_db.Profile,
+    proxy_url: str | None = None,
+    bot_data: dict | None = None
+) -> tuple[str, str, int]:
+    """Returns (status, status_message, http_code). 
+    status is 'pre-registered', 'registered', 'ordered', 'pending', or 'error'.
+    """
+    # Use provided proxy or create a standard session
+    client = api_client.create_session(proxy_url=proxy_url)
         
     try:
-        headers = _build_headers(context)
+        # Build headers manually or from bot_data if available
+        headers = dict(_REG_HEADERS)
         headers["Content-Type"] = "application/json"
         headers["Referer"] = "https://adhahi.dz/activation"
         headers["Origin"] = "https://adhahi.dz"
@@ -839,6 +840,7 @@ async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: prof
                 access_token = None
                 login_msg = "Failed to login after 3 attempts."
                 for attempt in range(3):
+                    # We pass headers to _fetch_and_solve_captcha but it uses its own logic for the GET
                     solved = await _fetch_and_solve_captcha(client, headers)
                     if not solved:
                         continue
@@ -856,12 +858,16 @@ async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: prof
                             access_token = login_resp.json().get("token")
                             break
                         else:
-                            login_msg = f"Login failed: HTTP {login_resp.status_code}"
+                            try:
+                                login_err = login_resp.json().get("message", login_resp.text)
+                            except Exception:
+                                login_err = login_resp.text
+                            login_msg = f"Login failed: {login_err}"
                     except Exception as exc:
                         login_msg = f"Login error: {exc}"
                 
                 if not access_token:
-                    return "registered", f"Account is active, but couldn't verify orders (Login failed: {login_msg})", resp.status_code
+                    return "registered", f"Account is active, but couldn't verify orders ({login_msg})", resp.status_code
                 
                 order_headers = {**headers, "Authorization": f"Bearer {access_token}", "Referer": "https://adhahi.dz/user/confirmation"}
                 try:
@@ -881,10 +887,10 @@ async def check_profile_status(context: ContextTypes.DEFAULT_TYPE, profile: prof
             elif "déjà été envoyé" in error_msg:
                 return "pre-registered", error_msg, resp.status_code
             else:
+                # This includes 404 "User not found"
                 return "pending", error_msg, resp.status_code
     except Exception as outer_exc:
         logger.error("Error in check_profile_status: %s", outer_exc)
         return "error", f"Unexpected error: {outer_exc}", 0
     finally:
-        if should_close:
-            await client.aclose()
+        await client.aclose()

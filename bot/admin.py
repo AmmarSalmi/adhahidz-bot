@@ -35,6 +35,7 @@ from telegram.ext import (
 from telegram.error import Forbidden
 
 from . import profile_db, db as db_mod
+from .proxy import get_proxy_url
 from .notifier import safe_send_message, safe_send_photo
 
 logger = logging.getLogger(__name__)
@@ -1916,85 +1917,79 @@ async def _run_sync_orders_task(app, admin_id: int, db_path: str) -> None:
     }
 
     # 1. Determine if we should use proxy
-    from .proxy import get_proxy_url
     use_proxy = app.bot_data.get("proxy_checkprof", False)
-    proxy_url = get_proxy_url() if use_proxy else None
+
+    from .registration import check_profile_status
 
     for i, profile in enumerate(profiles):
         try:
-            # Login first to get a token
-            async with api_client.create_session(proxy_url=proxy_url) as client:
-                # 1. CAPTCHA + Login
-                solved = await _fetch_and_solve_captcha(client, base_headers)
-                if not solved:
-                    failed_logins += 1
-                    continue
+            # 1. Determine if we should use proxy (with sticky session for this profile)
+            proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+
+            # 2. Use the unified check_profile_status logic
+            # This handles: check NIN -> (if active) Login -> (if token) Check Orders
+            status, msg, code = await check_profile_status(
+                api_client, 
+                profile, 
+                proxy_url=proxy_url,
+                bot_data=app.bot_data
+            )
+
+            if status == "error":
+                logger.error("Sync error for profile %s: %s", profile.id, msg)
+                failed_logins += 1
+                continue
+
+            # Update DB status if it changed (e.g. from registered -> pending if 404)
+            if status != profile.status:
+                await profile_db.set_profile_status(db_path, profile.id, status)
+                logger.info("Sync updated profile %s status: %s -> %s", profile.id, profile.status, status)
+
+            if status == "ordered":
+                # Found a new order!
+                secured_orders += 1
+                await db_mod.add_sync_event(db_path, 'order_found', profile.id, profile.user_id)
+                prof_info = f"*{profile.name or profile.nin}* (Phone: `{profile.phone}`)"
+                found_orders.append(prof_info)
                 
-                captcha_id, answer, _ = solved
-                login_headers = {**base_headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
-                login_body = {
-                    "nin": profile.nin, 
-                    "password": profile.password, 
-                    "deviceInfo": "WEB_APP", 
-                    "sessionType": "WEB"
-                }
-                
-                resp = await client.post("/api/v1/citizens/login", json=login_body, headers=login_headers)
-                if resp.status_code != 200:
-                    failed_logins += 1
-                    continue
-                
-                token = resp.json().get("token")
-                if not token:
-                    failed_logins += 1
-                    continue
-                
-                # 2. Check my-orders endpoint
-                auth_headers = {**base_headers, "Authorization": f"Bearer {token}", "Referer": "https://adhahi.dz/user/confirmation"}
-                resp = await client.get("/api/v1/orders/my-orders?page=0&size=10", headers=auth_headers)
-                
-                if 200 <= resp.status_code < 300:
-                    data = resp.json()
-                    recent = data.get("recentOrders", [])
-                    # We check for PENDING orders. Completed or cancelled ones don't count for 'ordered' status.
-                    has_pending = any(o.get("status") == "PENDING" for o in recent)
+                # Notify the user
+                try:
+                    lang = await db_mod.get_user_language(db_path, profile.user_id)
+                    text = t(lang, "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`").format(
+                        name=profile.name or profile.nin,
+                        nin=profile.nin,
+                        password=profile.password
+                    )
                     
-                    if has_pending:
-                        # 3. Mark as ordered in local DB
-                        await profile_db.set_profile_status(db_path, profile.id, "ordered")
-                        await db_mod.add_sync_event(db_path, 'order_found', profile.id, profile.user_id)
-                        prof_info = f"*{profile.name or profile.nin}* (Phone: `{profile.phone}`)"
-                        found_orders.append(prof_info)
-                        
-                        # 4. Notify user with localized congratulations and credentials
-                        try:
-                            lang = await db_mod.get_user_language(db_path, profile.user_id)
-                            # The localized message includes credentials for their convenience
-                            text = t(lang, "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`").format(
-                                name=profile.name or profile.nin,
-                                nin=profile.nin,
-                                password=profile.password
-                            )
-                            
-                            await safe_send_message(
-                                app.bot,
-                                user_id=profile.user_id,
-                                db_path=db_path,
-                                text=text,
-                                parse_mode="Markdown"
-                            )
-                        except Forbidden:
-                            # User blocked bot, we still note it for the admin report
-                            blocked_users.append(f"{profile.name or profile.nin} (User ID: `{profile.user_id}`)")
-                            await db_mod.add_sync_event(db_path, 'order_blocked', profile.id, profile.user_id)
-                        except Exception:
-                            logger.exception("Failed to notify user %s about secured order", profile.user_id)
+                    await safe_send_message(
+                        app.bot,
+                        user_id=profile.user_id,
+                        db_path=db_path,
+                        text=text,
+                        parse_mode="Markdown"
+                    )
+                except Forbidden:
+                    blocked_users.append(f"{profile.name or profile.nin} (User ID: `{profile.user_id}`)")
+                    await db_mod.add_sync_event(db_path, 'order_blocked', profile.id, profile.user_id)
+                except Exception:
+                    logger.exception("Failed to notify user %s about secured order", profile.user_id)
+            
+            elif status == "pending":
+                # This profile is no longer registered on the server (404)
+                logger.warning("Sync profile %s: Not Found on server (404). Setting back to pending.", profile.id)
+                failed_logins += 1
+            
+            elif status == "pre-registered":
+                # Needs OTP verification
+                logger.info("Sync profile %s: Pending OTP verification.", profile.id)
+                failed_logins += 1
+
         except Exception:
             logger.exception("Error syncing profile %s", profile.id)
             failed_logins += 1
         
         # Human-like delay and progress logging
-        await asyncio.sleep(random.uniform(0.8, 2.0))
+        await asyncio.sleep(random.uniform(1.0, 2.5))
         if (i+1) % 10 == 0:
             logger.info("Order Sync progress: %d/%d checked...", i+1, total)
 

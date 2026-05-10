@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -181,27 +182,52 @@ class QuotaApiClient:
             follow_redirects=True,
         )
 
+    @staticmethod
+    def _build_ssl_context() -> ssl.SSLContext:
+        """Build a lenient SSL context that works through residential proxies.
+
+        Some proxy tunnels (e.g. Databay) can cause 'SSL record layer failure'
+        when the default context negotiates TLS 1.3 only or uses a narrow
+        cipher set.  This context:
+          - Allows TLS 1.2+ (many proxies still relay TLS 1.2 handshakes)
+          - Uses the broad DEFAULT cipher string for maximum compatibility
+        """
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        # Load default CA certs so we still verify the destination certificate
+        ctx.load_default_certs()
+        # Use a broad cipher set that works across proxy chains
+        ctx.set_ciphers("DEFAULT")
+        return ctx
+
     def create_session(self, proxy_url: str | None = None, timeout_s: float | None = None) -> httpx.AsyncClient:
         """Create an isolated HTTP client for user-specific operations.
         ...
         """
         timeout = timeout_s if timeout_s is not None else self._timeout
+        
+        # Build a lenient SSL context to avoid 'SSL record layer' mismatches
+        # commonly seen with certain residential proxies.
+        ssl_context = self._build_ssl_context()
+        
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 "Referer": "https://adhahi.dz/register",
             },
             timeout=httpx.Timeout(
                 timeout=timeout,
-                connect=10.0,  # Increased connect timeout
+                connect=15.0,  # Even more generous for proxy handshakes
                 read=timeout,
-                write=10.0,
+                write=15.0,
                 pool=10.0
             ),
             follow_redirects=True,
             proxy=proxy_url,
+            http2=False, # Force HTTP/1.1
+            verify=ssl_context,
         )
 
     async def aclose(self) -> None:
