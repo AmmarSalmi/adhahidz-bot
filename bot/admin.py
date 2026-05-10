@@ -41,6 +41,7 @@ AWAIT_BROADCAST_CONFIRM = 2
 AWAIT_PROXY_TEST_CONFIG = 3
 AWAIT_CONCURRENCY_LIMIT = 4
 AWAIT_WILAYA_INTERVAL = 5
+AWAIT_PROFILE_ID_CHECK = 6
 
 # ---------------------------------------------------------------------------
 # Admin identity — loaded once from env at import time
@@ -253,6 +254,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
             [InlineKeyboardButton("🤫 Silent Force Check", callback_data="admin:force_check:silent")],
+            [InlineKeyboardButton("🆔 Check Profile by ID", callback_data="admin:check_profile_start")],
             [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
             [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
             [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
@@ -668,6 +670,84 @@ async def _single_proxy_attempt(api_client, proxy_url: str, attempt_num: int) ->
 
 
 # ---------------------------------------------------------------------------
+# Check Profile Feature
+# ---------------------------------------------------------------------------
+
+async def on_admin_check_profile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start the check profile by ID flow."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Cancel", callback_data="admin:broadcast_cancel")]]
+    )
+    await query.edit_message_text(
+        "🆔 *Check Profile by ID*\n\n"
+        "Please enter the profile ID number you want to inspect:",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return AWAIT_PROFILE_ID_CHECK
+
+async def on_admin_check_profile_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive the profile ID and display its information."""
+    if not is_admin(update):
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_PROFILE_ID_CHECK
+
+    try:
+        profile_id = int(msg.text.strip())
+    except ValueError:
+        await msg.reply_text("❌ *Invalid Input*\n\nPlease enter a valid numerical ID.", parse_mode="Markdown")
+        return AWAIT_PROFILE_ID_CHECK
+
+    db_path: str = context.application.bot_data.get("db_path", "")
+    profile = await profile_db.get_profile_by_id_admin(db_path, profile_id)
+
+    if not profile:
+        await msg.reply_text(f"❌ No profile found with ID `{profile_id}`.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    status_emoji = {
+        "pending": "⏳",
+        "registered": "✅",
+        "pre-registered": "📝",
+        "failed": "❌",
+        "registering": "🔄"
+    }.get(profile.status, "ℹ️")
+
+    valid_str = "✅ Yes" if profile.is_valid else "❌ No"
+
+    text = (
+        f"🆔 *Profile Information (ID: {profile.id})*\n\n"
+        f"👤 *Owner User ID:* `{profile.user_id}`\n"
+        f"📝 *Name:* `{profile.name}`\n"
+        f"💳 *NIN:* `{profile.nin}`\n"
+        f"🪪 *CNIBE:* `{profile.cnibe}`\n"
+        f"📱 *Phone:* `{profile.phone}`\n"
+        f"📧 *Email:* `{profile.email or 'N/A'}`\n"
+        f"🔑 *Password:* `{profile.password}`\n"
+        f"🏙️ *Wilaya:* `{profile.wilaya_name} ({profile.wilaya_id})`\n"
+        f"🏘️ *Commune:* `{profile.commune_name} ({profile.commune_code})`\n"
+        f"💵 *Payment:* `{profile.payment_method}`\n"
+        f"{status_emoji} *Status:* `{profile.status}`\n"
+        f"🛡️ *Valid Check:* `{valid_str}`\n"
+        f"📅 *Created:* `{profile.created_at}`\n"
+    )
+
+    await msg.reply_text(text, parse_mode="Markdown")
+    return ConversationHandler.END
+
+# ---------------------------------------------------------------------------
 # Broadcast Feature
 # ---------------------------------------------------------------------------
 
@@ -820,7 +900,8 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             CallbackQueryHandler(on_admin_broadcast_start, pattern=r"^admin:broadcast_start$"),
             CallbackQueryHandler(on_admin_test_proxy, pattern=r"^admin:test_proxy$"),
             CallbackQueryHandler(on_admin_set_concurrency, pattern=r"^admin:set_concurrency$"),
-            CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:wilaya$")
+            CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:wilaya$"),
+            CallbackQueryHandler(on_admin_check_profile_start, pattern=r"^admin:check_profile_start$")
         ],
         states={
             AWAIT_BROADCAST_MESSAGE: [
@@ -841,6 +922,10 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             AWAIT_WILAYA_INTERVAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_wilaya_interval_received),
                 CallbackQueryHandler(on_admin_proxy_cancel, pattern=r"^admin:proxy_cancel$")
+            ],
+            AWAIT_PROFILE_ID_CHECK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_check_profile_received),
+                CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
             ],
         },
         fallbacks=[

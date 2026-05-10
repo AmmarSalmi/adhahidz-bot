@@ -638,6 +638,8 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     text = update.message.text.strip()
     field = context.user_data.get("edit_field", "")
     profile_id = context.user_data.get("edit_profile_id", 0)
+    user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
 
     # Validate based on field
     if field == "name":
@@ -654,7 +656,7 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             return EDIT_WAITING_VALUE
     elif field == "phone":
         if not text.isdigit() or len(text) != 10 or not text.startswith("0"):
-            await update.message.reply_text("❌ Phone must be 10 digits starting with 0. Try again:")
+            await update.message.reply_text(t(lang, "❌ Phone must be 10 digits starting with 0. Try again:"))
             return EDIT_WAITING_VALUE
     elif field == "password":
         errors = _validate_password(text)
@@ -666,23 +668,25 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         if text.lower() in ("-", "skip", "none", "aucun", "no", "لا"):
             text = ""
         elif not _validate_email(text):
-            await update.message.reply_text("❌ Invalid email format. Try again or send `-` to skip:")
+            await update.message.reply_text(t(lang, "❌ Invalid email format. Try again or send `-` to skip:"))
             return EDIT_WAITING_VALUE
 
     db_path: str = context.application.bot_data["db_path"]
-    user_id = update.effective_user.id
 
     try:
         await profile_db.update_profile_field(db_path, profile_id, user_id, field, text)
     except Exception as exc:
         logger.exception("Failed to update profile field")
-        await update.message.reply_text(f"❌ Failed: {exc}")
+        await update.message.reply_text(t(lang, "❌ Failed: {exc}").format(exc=exc))
         return ConversationHandler.END
 
     context.user_data.pop("edit_profile_id", None)
     context.user_data.pop("edit_field", None)
 
-    await update.message.reply_text(f"✅ Profile #{profile_id} *{field}* updated.", parse_mode="Markdown")
+    await update.message.reply_text(
+        t(lang, "✅ Profile #{profile_id} *{field}* updated.").format(profile_id=profile_id, field=field),
+        parse_mode="Markdown"
+    )
     await _revalidate_and_warn(update, context, profile_id)
     return ConversationHandler.END
 

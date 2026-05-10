@@ -188,6 +188,18 @@ async def get_profile(db_path: str, profile_id: int, user_id: int) -> Profile | 
             return _row_to_profile(row) if row else None
 
 
+async def get_profile_by_id_admin(db_path: str, profile_id: int) -> Profile | None:
+    """Get a single profile by id (admin use, no user restriction)."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            f"SELECT {_SELECT_COLS} FROM profiles WHERE id=?",
+            (profile_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return _row_to_profile(row) if row else None
+
+
 async def update_profile_field(
     db_path: str, profile_id: int, user_id: int, field: str, value: Any
 ) -> bool:
