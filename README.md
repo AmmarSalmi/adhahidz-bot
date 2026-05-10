@@ -7,15 +7,18 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Interactive UI**: Navigate easily using persistent bottom menus and hierarchical inline keyboards instead of memorizing commands.
 - **Multi-language Support (i18n)**: Fully localized interface in Arabic 🇩🇿, French 🇫🇷, and English 🇬🇧.
 - **Notifications**: Alerts subscribed users when quota becomes available in their chosen Wilaya.
-- **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open. Now features **Seniority-Based Priority** (ordering users by their join date) and **Global Concurrency Throttling** to ensure system stability and avoid server-side blocking.
+- **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open. Now features **Seniority-Based Priority**, **Global Concurrency Throttling**, and **Aggressive Mode** (continuous scanning of open Wilayas to ensure no profile is missed, even if added after the Wilaya opened).
+- **Intelligent Nudging**: When Wilayas are open, the bot aggressively nudges users with `pre-registered` profiles to verify their OTP, featuring a built-in **1-hour cooldown** to balance urgency with user experience.
 - **CAPTCHA Solving**: Built-in support for local OCR (`ddddocr`) and third-party API (`2captcha`) for solving CAPTCHAs during automated workflows, with sequential fallback to minimize paid API usage.
 - **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification.
 - **Profile Usage Limits**: Enforces a fair-usage limit of 3 registration profiles per user to ensure system stability and performance.
 - **Quota History & Analysis**: Automatically records every "OPEN" and "CLOSE" event for all Wilayas in the database. This data allows for analyzing quota patterns, measuring window durations, and understanding the frequency of availability changes. Recent history is visible directly in the admin stats panel.
 - **Admin Access Control**: Includes a hidden admin dashboard with a toggleable "restricted mode", **live concurrency limit adjustment**, **live check interval updates**, **granular proxy controls**, and **recent quota event history**. Commands like `/checkprofile` are restricted to administrators.
 - **Rate Limit Fail-Safe Strategy**: The bot is highly reactive to server-side blocking. If an HTTP 429 (Too Many Requests) is detected during quota monitoring, the bot automatically **increases the check interval by 30%** and immediately alerts the administrator with the error details.
-- **Improved Log Stream**: Suppresses verbose library success logs (HTTP 200s) to keep the stream focused on critical bot activity and Wilaya monitoring events.
-- **Granular Proxy Management**: Admin can independently toggle Databay residential proxy usage for three critical workflows: Wilaya quota monitoring, Automated registration/ordering, and Profile status checking. When proxying is enabled for Wilaya checks, the bot prompts for a specific check interval to optimize bandwidth.
+- **Improved Log Stream**: Suppresses verbose library success logs (HTTP 200s) and silences noisy tracebacks for common non-critical events (like users blocking the bot) to keep the log stream high-signal.
+- **Granular Proxy Management**: Admin can independently toggle residential proxy usage for three critical workflows: Wilaya monitoring, Auto-registration, and Profile status checking.
+- **Sticky Session Isolation**: Each profile interaction (registration, login, ordering) is isolated in its own HTTP session. When proxying is enabled, it uses **Sticky Session IDs** based on the citizen's NIN to ensure IP consistency across the entire registration lifecycle, avoiding WAF blocks.
+- **Resilient Registration Detection**: The bot now features enhanced detection for diverse API responses, including multilingual "already registered" messages (Arabic/French/English), allowing it to seamlessly transition from registration to the login+order flow without manual intervention.
 
 ### Prerequisites
 - Docker + Docker Compose
@@ -37,8 +40,6 @@ cp .env.example .env
 
 Optional tuning:
 - `CHECK_INTERVAL_SECONDS`: how often to poll the API (default `300`)
-- `CONFIRM_FETCHES`: when `available=true` is detected, re-fetch this many extra times before notifying (default `2`)
-- `CONFIRM_DELAY_SECONDS`: delay between confirmation re-fetches in seconds (default `1`)
 - `TWO_CAPTCHA_API_KEY`: API key for 2Captcha service (optional, falls back to local `ddddocr` if not provided)
 - `MAX_CONCURRENT_SESSIONS`: global limit of simultaneous registration/login connections (default `50`)
 - `PROXY_WILAYA`: enable proxy for background quota checks (default `false`)

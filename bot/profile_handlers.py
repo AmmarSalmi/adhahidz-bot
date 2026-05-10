@@ -356,6 +356,7 @@ def build_addprofile_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", ap_cancel)],
         per_user=True,
         per_chat=True,
+        per_message=False,
     )
 
 
@@ -685,6 +686,7 @@ async def on_edit_payment_method(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(t(lang, "❌ Invalid payment method. Try again."))
         return EDIT_WAITING_VALUE
 
+    db_path: str = context.application.bot_data["db_path"]
     try:
         await profile_db.update_profile_field(db_path, profile_id, user_id, "payment_method", method)
     except Exception as exc:
@@ -764,6 +766,7 @@ def build_editprofile_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", edit_cancel)],
         per_user=True,
         per_chat=True,
+        per_message=False,
     )
 
 
@@ -845,4 +848,5 @@ def build_reorder_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", reorder_cancel)],
         per_user=True,
         per_chat=True,
+        per_message=False,
     )

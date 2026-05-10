@@ -16,47 +16,11 @@ from .notifier import notify_users
 logger = logging.getLogger(__name__)
 
 
-async def _confirm_available(
-    *,
-    api_client: QuotaApiClient,
-    wilaya_code: str,
-    confirm_fetches: int,
-    confirm_delay_s: float,
-    proxy_url: str | None = None,
-) -> bool:
-    """
-    Confirm that a wilaya remains available across successive fetches.
-    This helps reduce false positives from transient/cached API responses.
-    """
-    if confirm_fetches <= 0:
-        return True
-
-    for i in range(confirm_fetches):
-        if confirm_delay_s > 0:
-            await asyncio.sleep(confirm_delay_s)
-
-        statuses = await api_client.fetch_wilaya_quotas(proxy_url=proxy_url)
-        st = statuses.get(wilaya_code)
-        if not st or not st.available:
-            logger.info(
-                "Availability confirmation failed wilaya=%s attempt=%s/%s",
-                wilaya_code,
-                i + 1,
-                confirm_fetches,
-            )
-            return False
-
-    logger.debug("Availability confirmed wilaya=%s confirmations=%s", wilaya_code, confirm_fetches)
-    return True
-
-
 async def _poll_once(
     *,
     app,
     db_path: str,
     api_client: QuotaApiClient,
-    confirm_fetches: int,
-    confirm_delay_s: float,
 ) -> None:
     logger.info("--- Starting scheduled quota poll ---")
     from .proxy import get_proxy_url
@@ -125,16 +89,6 @@ async def _poll_once(
             )
 
             if status.available:
-                confirmed = await _confirm_available(
-                    api_client=api_client,
-                    wilaya_code=wilaya_code,
-                    confirm_fetches=confirm_fetches,
-                    confirm_delay_s=confirm_delay_s,
-                    proxy_url=proxy_url,
-                )
-                if not confirmed:
-                    continue
-
                 to_notify = await db_mod.get_subscribers_to_notify(db_path, wilaya_code)
                 if to_notify:
                     remaining_txt = "unknown" if status.remaining is None else str(status.remaining)
@@ -142,28 +96,20 @@ async def _poll_once(
                     await notify_users(app.bot, to_notify, msg)
                     await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
-                # Auto-registration: trigger only once per availability window
-                auto_reg_done: set[str] = app.bot_data.setdefault("auto_reg_done", set())
-                if wilaya_code in auto_reg_done:
-                    logger.debug(
-                        "Auto-registration already triggered for wilaya %s this window — skipping",
-                        wilaya_code,
+                # Auto-registration: trigger every poll if actionable profiles exist (Aggressive Mode)
+                try:
+                    actionable_profiles = await profile_db.get_actionable_profiles_prioritized(
+                        db_path, wilaya_code, ["pending", "registered", "pre-registered"]
                     )
-                else:
-                    try:
-                        actionable_profiles = await profile_db.get_actionable_profiles_prioritized(
-                            db_path, wilaya_code, ["pending", "registered", "pre-registered"]
+                    if actionable_profiles:
+                        logger.info(
+                            "Found %d actionable profiles for wilaya %s — triggering auto-registration",
+                            len(actionable_profiles),
+                            wilaya_code,
                         )
-                        if actionable_profiles:
-                            logger.info(
-                                "Found %d actionable profiles for wilaya %s — triggering auto-registration",
-                                len(actionable_profiles),
-                                wilaya_code,
-                            )
-                            await auto_submit_profiles(app, actionable_profiles)
-                        auto_reg_done.add(wilaya_code)
-                    except Exception:
-                        logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
+                        await auto_submit_profiles(app, actionable_profiles)
+                except Exception:
+                    logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
             else:
                 # Notify users that the quota they were alerted about is now gone.
                 previously_notified = await db_mod.get_notified_subscribers(db_path, wilaya_code)
@@ -172,9 +118,6 @@ async def _poll_once(
                     gone_msg = f"❌ Quota in {wilaya_name} is no longer available."
                     await notify_users(app.bot, previously_notified, gone_msg)
                 await db_mod.reset_notified_for_wilaya(db_path, wilaya_code)
-                # Reset auto-registration gate so it re-triggers next time quota opens
-                auto_reg_done: set[str] = app.bot_data.setdefault("auto_reg_done", set())
-                auto_reg_done.discard(wilaya_code)
     except Exception as e:
         import httpx
         if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429:
@@ -275,8 +218,6 @@ def start_scheduler(
     db_path: str,
     api_client: QuotaApiClient,
     interval_s: int,
-    confirm_fetches: int = 2,
-    confirm_delay_s: float = 1.0,
 ) -> AsyncIOScheduler:
     """Initialize and start the background task scheduler."""
     
@@ -289,8 +230,6 @@ def start_scheduler(
             app=app,
             db_path=db_path,
             api_client=api_client,
-            confirm_fetches=confirm_fetches,
-            confirm_delay_s=confirm_delay_s,
         )
 
     # 1. Quota Polling Job

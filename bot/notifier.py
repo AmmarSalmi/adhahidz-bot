@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from telegram.error import RetryAfter, TelegramError
+from telegram.error import Forbidden, RetryAfter, TelegramError
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,9 @@ async def notify_users(bot, user_ids: list[int], message: str) -> None:
                 wait_s = float(getattr(e, "retry_after", 1.0))
                 logger.warning("Telegram rate-limited; sleeping %.2fs", wait_s)
                 await asyncio.sleep(wait_s)
+            except Forbidden:
+                logger.warning("Bot was blocked by user_id=%s", user_id)
+                break
             except TelegramError:
                 logger.exception("Failed sending message to user_id=%s", user_id)
                 break

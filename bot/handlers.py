@@ -172,16 +172,19 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
 
+    lang = await get_lang(context, user_id)
+
     # --- Last fetch timestamp ---
     raw_ts: str | None = context.application.bot_data.get("last_fetch_ts")
     if raw_ts:
         try:
             dt = datetime.fromisoformat(raw_ts).astimezone(timezone.utc)
-            fetch_line = f"🕐 *Last fetch:* `{dt.strftime('%Y-%m-%d %H:%M:%S')} UTC`"
+            time_str = f"`{dt.strftime('%Y-%m-%d %H:%M:%S')} UTC`"
+            fetch_line = t(lang, "🕐 *Last fetch:* {time}").format(time=time_str)
         except ValueError:
-            fetch_line = f"🕐 *Last fetch:* `{raw_ts}`"
+            fetch_line = t(lang, "🕐 *Last fetch:* {time}").format(time=f"`{raw_ts}`")
     else:
-        fetch_line = "🕐 *Last fetch:* _not done yet_"
+        fetch_line = t(lang, "🕐 *Last fetch:* {time}").format(time=f"_{t(lang, 'not done yet')}_")
 
     # --- Wilayas being watched (scoped to the requesting user) ---
     wilaya_lookup = dict(_get_wilaya_list(context))  # code -> name
@@ -203,7 +206,6 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     all_codes = sub_codes | prof_codes
 
-    lang = await get_lang(context, user_id)
     if not all_codes:
         watched_section = t(lang, "_No wilayas are currently being watched._")
     else:
@@ -212,9 +214,9 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             name = wilaya_lookup.get(code, code)
             tags = []
             if code in sub_codes:
-                tags.append("📬 subscription")
+                tags.append(t(lang, "📬 subscription"))
             if code in prof_codes:
-                tags.append("🤖 auto-reg")
+                tags.append(t(lang, "🤖 auto-reg"))
             rows.append(f"  • *{name}* ({code}) — {', '.join(tags)}")
         watched_section = "\n".join(rows)
 
@@ -461,14 +463,5 @@ async def on_wilaya_selected(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     lang = await get_lang(context, user_id)
     wilaya_name = _lookup_wilaya_name(context, wilaya_code)
-    # Translate this specific string manually or leave it as is if it's dynamic
-    # "You will be notified when quota is available in {wilaya_name}."
-    # I'll just keep it simple since it's dynamic, I'll add a quick inline translation.
-    if lang == "ar":
-        text = f"سيتم إشعارك عندما تتوفر الحصة في {wilaya_name}."
-    elif lang == "fr":
-        text = f"Vous serez notifié lorsque le quota sera disponible à {wilaya_name}."
-    else:
-        text = f"You will be notified when quota is available in {wilaya_name}."
-        
+    text = t(lang, "You will be notified when quota is available in {wilaya_name}.").format(wilaya_name=wilaya_name)
     await query.edit_message_text(text)

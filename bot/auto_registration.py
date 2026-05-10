@@ -175,7 +175,7 @@ async def _try_submit_profile(
 
         if not is_captcha_error and "captcha" not in resp.text.lower():
             # Check if account is already active
-            if any(term in error_msg.lower() for term in ["déjà actif", "already active", "déjà enregistré", "already registered"]):
+            if any(term in error_msg.lower() for term in ["déjà actif", "already active", "déjà enregistré", "already registered", "déjà inscrit"]):
                 logger.info("Profile %s is already registered on server: %s", profile.id, error_msg)
                 return profile, "already_registered", error_msg
 
@@ -407,6 +407,8 @@ async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
             
             # 2. Handle registered (login+order flow)
             if registered:
+                for p in registered:
+                    await profile_db.set_profile_status(db_path, p.id, "registering")
                 tasks.append(_process_registered_profiles(app, registered, api_client, use_proxy, base_headers, db_path))
             
             # 3. Handle pre-registered (nudge flow)
@@ -436,7 +438,16 @@ async def _nudge_preregistered_profiles(
     but we never block waiting for their response.
     """
     sem = app.bot_data["concurrency_semaphore"]
+    nudge_history = app.bot_data.setdefault("nudge_history", {}) # profile_id -> timestamp
+    now = time.time()
+    
     for profile in profiles:
+        # Cooldown check: only nudge once every hour
+        last_nudge = nudge_history.get(profile.id, 0)
+        if now - last_nudge < 3600:
+            logger.debug("Skipping nudge for profile %s (cooldown active)", profile.id)
+            continue
+
         # Each nudge gets its own connection (minimal overhead as it's sequential)
         async with sem:
             proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
@@ -479,6 +490,7 @@ async def _nudge_preregistered_profiles(
                     ),
                     parse_mode="Markdown",
                 )
+                nudge_history[profile.id] = now
             else:
                 await app.bot.send_message(
                     chat_id=user_id,
@@ -542,6 +554,7 @@ async def _process_registered_profiles(
             )
         elif outcome == "order_fail":
             logger.error("Order failed for profile %s: %s", profile.id, detail)
+            await profile_db.set_profile_status(db_path, profile.id, "registered")
             await app.bot.send_message(
                 chat_id=user_id,
                 text=(
@@ -553,6 +566,7 @@ async def _process_registered_profiles(
             )
         elif outcome == "login_fail":
             logger.error("Login failed for profile %s: %s", profile.id, detail)
+            await profile_db.set_profile_status(db_path, profile.id, "registered")
             await app.bot.send_message(
                 chat_id=user_id,
                 text=(
@@ -564,6 +578,7 @@ async def _process_registered_profiles(
             )
         else:
             logger.error("Login+order error for profile %s: %s", profile.id, detail)
+            await profile_db.set_profile_status(db_path, profile.id, "registered")
             await app.bot.send_message(
                 chat_id=user_id,
                 text=f"❌ Error for profile *{profile.name or masked}*:\n{detail}",
@@ -626,7 +641,11 @@ async def _process_user_profiles(
             logger.info("Profile %s already registered. Switching to login flow.", profile.id)
             await profile_db.set_profile_status(db_path, profile.id, "registered")
             
-            l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
+            async with sem:
+                proxy_url = get_proxy_url(session_id=profile.nin) if use_proxy else None
+                async with api_client.create_session(proxy_url=proxy_url) as client:
+                    l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
+            
             masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
             if l_outcome == "ordered":
                 await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
@@ -651,8 +670,10 @@ async def _process_user_profiles(
                 )
         elif outcome == "ip_blocked":
             ip_blocked = True
+            await profile_db.set_profile_status(db_path, profile.id, "pending")
             remaining.append(profile)
         elif outcome == "captcha_fail":
+            await profile_db.set_profile_status(db_path, profile.id, "pending")
             remaining.append(profile)
         else:
             await profile_db.set_profile_status(db_path, profile.id, "failed")
@@ -720,6 +741,13 @@ async def _process_user_profiles(
                             ),
                             parse_mode="Markdown",
                         )
+                elif outcome == "ip_blocked":
+                    await profile_db.set_profile_status(db_path, profile.id, "pending")
+                    await app.bot.send_message(
+                        chat_id=user_id,
+                        text=f"⚠️ *IP Blocked during Phase 2* for {profile.name or masked}. Resetting to pending.",
+                        parse_mode="Markdown",
+                    )
                 elif outcome == "captcha_fail":
                     # Queue manual CAPTCHA for user
                     await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)
@@ -1250,4 +1278,5 @@ def build_verifyotp_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", verifyotp_cancel)],
         per_user=True,
         per_chat=True,
+        per_message=False,
     )

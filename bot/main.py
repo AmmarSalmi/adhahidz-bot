@@ -69,8 +69,6 @@ async def _post_init(app: Application) -> None:
     base_url = os.getenv("QUOTA_API_BASE_URL", "https://adhahi.dz")
     api_key = os.getenv("QUOTA_API_KEY") or None
     interval_s = int(os.getenv("CHECK_INTERVAL_SECONDS", "300"))
-    confirm_fetches = int(os.getenv("CONFIRM_FETCHES", "2"))
-    confirm_delay_s = float(os.getenv("CONFIRM_DELAY_SECONDS", "1"))
     db_path = os.getenv("DATABASE_PATH", "/data/subscriptions.db")
     timeout_s = float(os.getenv("HTTP_TIMEOUT_SECONDS", "10"))
     max_concurrent = int(os.getenv("MAX_CONCURRENT_SESSIONS", "50"))
@@ -105,8 +103,6 @@ async def _post_init(app: Application) -> None:
         db_path=db_path,
         api_client=api,
         interval_s=interval_s,
-        confirm_fetches=confirm_fetches,
-        confirm_delay_s=confirm_delay_s,
     )
     app.bot_data["scheduler"] = scheduler
 
@@ -148,10 +144,8 @@ async def _post_init(app: Application) -> None:
     )
 
     logger.info(
-        "Bot started. Interval=%ss ConfirmFetches=%s ConfirmDelay=%ss BaseURL=%s DB=%s",
+        "Bot started. Interval=%ss BaseURL=%s DB=%s",
         interval_s,
-        confirm_fetches,
-        confirm_delay_s,
         base_url,
         db_path,
     )
