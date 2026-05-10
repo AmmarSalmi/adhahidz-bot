@@ -34,6 +34,7 @@ from telegram.ext import (
 from telegram.error import Forbidden
 
 from . import profile_db, db as db_mod
+from .notifier import safe_send_message, safe_send_photo
 
 logger = logging.getLogger(__name__)
 
@@ -871,8 +872,10 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
                 msg_text = translated_msgs.get(user_lang, translated_msgs["ar"])
                 
                 try:
-                    await context.bot.send_message(
-                        chat_id=user_id,
+                    await safe_send_message(
+                        context.bot,
+                        user_id=user_id,
+                        db_path=db_path,
                         text=f"📢 *Announcement*\n\n{msg_text}",
                         parse_mode="Markdown"
                     )
@@ -1313,7 +1316,13 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                     )
 
                 try:
-                    await context.bot.send_message(chat_id=user_id, text="\n".join(msg_parts), parse_mode="Markdown")
+                    await safe_send_message(
+                        context.bot,
+                        user_id=user_id,
+                        db_path=db_path,
+                        text="\n".join(msg_parts),
+                        parse_mode="Markdown"
+                    )
                     notifications_sent += 1
                     await asyncio.sleep(0.05) 
                 except Exception as e:
@@ -1528,7 +1537,13 @@ async def _run_notify_invalid_nins_task(app, admin_id: int, db_path: str) -> Non
             text = t(lang, "⚠️ *Invalid NIN Detected*\n\nYour profile *{name}* was rejected by the server because the NIN `{nin}` does not exist in the Ministry of Interior's database (MICLAT).\n\nPlease check for typos and edit your profile using the /profiles menu.").format(name=profile.name or f"ID {profile.id}", nin=nin)
             
             try:
-                await app.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+                await safe_send_message(
+                    app.bot,
+                    user_id=user_id,
+                    db_path=db_path,
+                    text=text,
+                    parse_mode="Markdown"
+                )
                 notified += 1
                 # 4. Mark inbox entry as resolved
                 await db_mod.resolve_inbox_entry(db_path, entry_id)

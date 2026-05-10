@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from telegram.error import Forbidden, RetryAfter, TelegramError
+from telegram.error import Forbidden, RetryAfter, TelegramError, TimedOut
 
 from . import db as db_mod
 from .i18n import t
@@ -31,6 +31,10 @@ async def notify_users(bot, user_ids: list[int], message: str, db_path: str | No
                 wait_s = float(getattr(e, "retry_after", 1.0))
                 logger.warning("Telegram rate-limited; sleeping %.2fs", wait_s)
                 await asyncio.sleep(wait_s)
+            except TimedOut:
+                logger.warning("Telegram API request timed out for user_id=%s; retrying (attempt %d/5)", user_id, attempt + 1)
+                await asyncio.sleep(1.0)
+                continue
             except Forbidden:
                 logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
                 if db_path:
@@ -57,6 +61,9 @@ async def safe_send_message(bot, user_id: int, db_path: str | None = None, **kwa
         if db_path:
             await db_mod.delete_user_data(db_path, user_id)
         return False
+    except TimedOut:
+        logger.warning("Telegram API request timed out sending message to user_id=%s", user_id)
+        return False
     except TelegramError:
         logger.exception("Failed sending message to user_id=%s", user_id)
         return False
@@ -71,6 +78,9 @@ async def safe_send_photo(bot, user_id: int, db_path: str | None = None, **kwarg
         logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
         if db_path:
             await db_mod.delete_user_data(db_path, user_id)
+        return False
+    except TimedOut:
+        logger.warning("Telegram API request timed out sending photo to user_id=%s", user_id)
         return False
     except TelegramError:
         logger.exception("Failed sending photo to user_id=%s", user_id)

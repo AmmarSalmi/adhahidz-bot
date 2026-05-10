@@ -11,7 +11,8 @@ warnings.filterwarnings("ignore", message=r".*per_message.*")
 from dotenv import load_dotenv
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters, ContextTypes
-from telegram.error import BadRequest, Forbidden, NetworkError, TelegramError
+from telegram.error import BadRequest, Forbidden, NetworkError, TelegramError, TimedOut
+from telegram.request import HTTPXRequest
 
 from .admin import (
     admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, 
@@ -215,6 +216,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning("Bot was blocked by a user (Forbidden error)")
         return
 
+    # Handle timeouts gracefully
+    if isinstance(context.error, TimedOut):
+        logger.warning("Telegram API request timed out. This usually happens during high activity or network congestion.")
+        return
+
     # Log other errors
     logger.error("Exception while handling an update:", exc_info=context.error)
 
@@ -227,9 +233,20 @@ def main() -> None:
     if not token:
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
 
+    # Configure Telegram request with longer timeouts to prevent TimedOut errors
+    # Default is 20s for read/write, 5s for connect.
+    # We'll increase them to handle periods of high API load.
+    tg_request = HTTPXRequest(
+        connect_timeout=15.0, 
+        read_timeout=30.0, 
+        write_timeout=30.0,
+        pool_timeout=10.0
+    )
+
     app = (
         ApplicationBuilder()
         .token(token)
+        .request(tg_request)
         .post_init(_post_init)
         .post_shutdown(_post_shutdown)
         .build()
