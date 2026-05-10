@@ -14,6 +14,7 @@ from .auto_registration import auto_submit_profiles, remind_preregistered_profil
 from .notifier import notify_users
 from .i18n import t
 from .db import get_user_language
+from .admin import ADMIN_TELEGRAM_ID
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +186,7 @@ async def remove_excess_profiles_job(app, db_path: str) -> None:
         user_profiles = await profile_db.get_all_profiles_grouped_by_user(db_path)
         removed_count = 0
         for user_id, profiles in user_profiles.items():
-            if len(profiles) > 3:
+            if len(profiles) > 3 and user_id != ADMIN_TELEGRAM_ID:
                 excess_profiles = profiles[3:]
                 for p in excess_profiles:
                     await profile_db.delete_profile(db_path, p.id, user_id)

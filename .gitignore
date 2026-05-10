@@ -7,3 +7,5 @@ captcha_sample.png
 testing_scripts/
 debug_query.py
 .agent/
+scratch/
+debug_*

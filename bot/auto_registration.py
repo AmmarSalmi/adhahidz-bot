@@ -518,7 +518,7 @@ async def _nudge_preregistered_profiles(
                     app.bot,
                     user_id=user_id,
                     db_path=db_path,
-                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nAn OTP has been resent to your phone.\nPlease use the official website *immediately* to verify and complete your order:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, phone=profile.phone),
+                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nNIN: `{nin}`\n\nAn OTP has been resent to your phone.\nPlease use the official website *immediately* to verify and complete your order:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
                     parse_mode="Markdown",
                 )
                 nudge_history[profile.id] = now
@@ -528,7 +528,7 @@ async def _nudge_preregistered_profiles(
                     app.bot,
                     user_id=user_id,
                     db_path=db_path,
-                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\n⚠️ Failed to resend OTP. Please try verifying via the official website:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, phone=profile.phone),
+                    text=t(lang, "🚨 *QUOTA IS OPEN — Verify NOW!*\n\nProfile: *{name}*\nNIN: `{nin}`\n\n⚠️ Failed to resend OTP. Please try verifying via the official website:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
                     parse_mode="Markdown",
                 )
         except Forbidden:
@@ -690,7 +690,7 @@ async def _process_user_profiles(
                     app.bot,
                     user_id=user_id,
                     db_path=db_path,
-                    text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nYour spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, phone=profile.phone),
+                    text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nNIN: `{nin}`\n\nYour spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
                     parse_mode="Markdown",
                 )
             elif outcome == "already_registered":
@@ -788,22 +788,19 @@ async def _process_user_profiles(
                     if outcome == "submitted":
                         await profile_db.set_profile_status(db_path, profile.id, "submitted")
                         masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                        lang = await get_user_language(db_path, user_id)
                         await safe_send_message(
                             app.bot,
                             user_id=user_id,
                             db_path=db_path,
-                            text=(
-                                f"✅ *Registration submitted!*\n\n"
-                                f"Profile: *{profile.name or masked}*\n"
-                                f"Phone: `{profile.phone}`\n\n"
-                                "Your spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation"
-                            ),
+                            text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nNIN: `{nin}`\n\nYour spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
                             parse_mode="Markdown",
                         )
                     elif outcome == "already_registered":
                         # Switch to login + order flow immediately
                         logger.info("Profile %s already registered (Phase 2). Switching to login flow.", profile.id)
                         await profile_db.set_profile_status(db_path, profile.id, "registered")
+                        l_profile, l_outcome, l_detail = await _try_login_and_order(profile, client, base_headers)
                         
                         if l_outcome == "ordered" or l_outcome == "already_ordered":
                             await profile_db.set_profile_status(db_path, l_profile.id, "ordered")
@@ -912,7 +909,7 @@ async def _send_manual_captcha(
         user_id=user_id,
         db_path=db_path,
         photo=io.BytesIO(image_bytes),
-        caption=t(lang, "🔐 *Manual CAPTCHA needed*\n\nProfile: *{name}*\nPhone: `{phone}`\n\nAuto-solve failed. **Reply to this message** with the CAPTCHA answer.\n_Expires in {expires_in} seconds._").format(name=profile.name or masked, phone=profile.phone, expires_in=_CAPTCHA_TTL_S),
+        caption=t(lang, "🔐 *Manual CAPTCHA needed*\n\nProfile: *{name}*\nNIN: `{nin}`\n\nAuto-solve failed. **Reply to this message** with the CAPTCHA answer.\n_Expires in {expires_in} seconds._").format(name=profile.name or masked, nin=profile.nin, expires_in=_CAPTCHA_TTL_S),
         parse_mode="Markdown",
     )
     if not msg:
@@ -1112,13 +1109,20 @@ async def _complete_post_otp_flow(
     except Exception:
         order_text = resp.text
 
-    masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+    lang = await get_user_language(db_path, profile.user_id)
+    text = t(lang, "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`").format(
+        name=profile.name or masked,
+        nin=profile.nin,
+        password=profile.password
+    )
+    
     await update.message.reply_text(
-        f"🎉 *Order Created Successfully!*\n\n"
-        f"Profile: *{profile.name or masked}*\n"
-        f"```\n{order_text[:3000]}\n```",
+        text,
         parse_mode="Markdown",
     )
+    
+    # Also log the raw order text for debug if needed
+    logger.info("Order created successfully for profile %s. Response: %s", profile.id, order_text[:500])
 
     # ── Fetch my-orders ──
     headers["Referer"] = "https://adhahi.dz/user/confirmation"

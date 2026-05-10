@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 from . import profile_db
-from .admin import check_restricted
+from .admin import check_restricted, is_admin
 from .registration import (
     validate_profile_compliance,
     validate_email_format,
@@ -65,7 +65,7 @@ async def addprofile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     lang = await get_lang(context, user_id)
     
     profiles = await profile_db.get_profiles(db_path, user_id)
-    if len(profiles) >= 3:
+    if len(profiles) >= 3 and not is_admin(update):
         await update.effective_message.reply_text(
             t(lang, "⚠️ *Profile Limit Reached*\n\nTo ensure fair access, we are restricting all users to a maximum of 3 profiles. Please delete an existing profile manually using /profiles to add a new one."),
             parse_mode="Markdown"
