@@ -265,7 +265,7 @@ def main() -> None:
 
     # --- Admin-only handlers (hidden, not in setMyCommands) ---
     app.add_handler(CommandHandler("adminammar", admin_command))
-    app.add_handler(CallbackQueryHandler(on_admin_force_check, pattern=r"^admin:force_check$"))
+    app.add_handler(CallbackQueryHandler(on_admin_force_check, pattern=r"^admin:force_check(:silent)?$"))
     app.add_handler(CallbackQueryHandler(on_admin_stats, pattern=r"^admin:stats$"))
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_restrict, pattern=r"^admin:toggle_restrict$"))

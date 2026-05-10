@@ -239,6 +239,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
+            [InlineKeyboardButton("🤫 Silent Force Check", callback_data="admin:force_check:silent")],
             [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
             [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
             [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
@@ -1128,8 +1129,11 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     db_path: str = context.application.bot_data.get("db_path", "")
-    logger.info("Admin %s initiated force check scan", update.effective_user.id)
-    await query.edit_message_text("⏳ Scanning all profiles in database...")
+    is_silent = query.data.endswith(":silent")
+    mode_txt = " (SILENT)" if is_silent else ""
+    
+    logger.info("Admin %s initiated force check scan%s", update.effective_user.id, mode_txt)
+    await query.edit_message_text(f"⏳ Scanning all profiles in database{mode_txt.lower()}...")
 
     checked_count = 0
     fixed_emails = 0
@@ -1162,6 +1166,17 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                 if pw_errs:
                     other_errors.append("Password")
                 
+                # Determine if profile conforms to norms
+                conforms = (is_valid_email and not other_errors)
+                new_is_valid = 1 if conforms else 0
+                
+                # Update is_valid in DB if it changed
+                if p.is_valid != new_is_valid:
+                    try:
+                        await profile_db.update_profile_field(db_path, p.id, user_id, "is_valid", new_is_valid)
+                    except Exception:
+                        logger.exception("Failed to update is_valid for profile %s", p.id)
+
                 if other_errors:
                     invalid_others += 1
                     for field in other_errors:
@@ -1177,7 +1192,7 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                         logger.exception("Failed to fix email for profile %s", p.id)
 
             # Notify user if we fixed something or found errors
-            if user_fixed_count > 0 or user_invalid_fields:
+            if not is_silent and (user_fixed_count > 0 or user_invalid_fields):
                 msg_parts = ["⚠️ *Profile Maintenance Notification*\n"]
                 
                 if user_fixed_count > 0:
@@ -1205,8 +1220,9 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception as e:
                     logger.warning("Could not notify user %s: %s", user_id, e)
 
+        mode_txt = " (SILENT)" if is_silent else ""
         summary_text = (
-            "✅ *Database Check Complete*\n\n"
+            f"✅ *Database Check Complete{mode_txt}*\n\n"
             f"Profiles checked: `{checked_count}`\n"
             f"Invalid emails fixed: `{fixed_emails}`\n"
             f"Other invalid fields detected: `{invalid_others}` (NIN/CNIBE/PW)\n"

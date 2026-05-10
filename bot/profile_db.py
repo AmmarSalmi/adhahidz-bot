@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   email           TEXT NOT NULL DEFAULT '',
   payment_method  TEXT NOT NULL DEFAULT 'CASH',
   status          TEXT NOT NULL DEFAULT 'pending',
+  is_valid        INTEGER NOT NULL DEFAULT 1,
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
@@ -51,6 +52,7 @@ class Profile:
     email: str
     payment_method: str
     status: str
+    is_valid: int
     created_at: str
 
 
@@ -71,13 +73,14 @@ def _row_to_profile(row: tuple) -> Profile:
         email=str(row[12]),
         payment_method=str(row[13]),
         status=str(row[14]),
-        created_at=str(row[15]),
+        is_valid=int(row[15]),
+        created_at=str(row[16]),
     )
 
 
 _SELECT_COLS = (
     "id, user_id, priority, name, nin, cnibe, phone, password, "
-    "wilaya_id, wilaya_name, commune_code, commune_name, email, payment_method, status, created_at"
+    "wilaya_id, wilaya_name, commune_code, commune_name, email, payment_method, status, is_valid, created_at"
 )
 
 
@@ -111,6 +114,7 @@ async def init_profiles_table(db_path: str) -> None:
         for migration in [
             "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE profiles ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'CASH';",
+            "ALTER TABLE profiles ADD COLUMN is_valid INTEGER NOT NULL DEFAULT 1;",
         ]:
             try:
                 await db.execute(migration)
@@ -246,7 +250,7 @@ async def get_pending_profiles_for_wilaya(
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles "
-            "WHERE CAST(wilaya_id AS TEXT)=? AND status='pending' "
+            "WHERE CAST(wilaya_id AS TEXT)=? AND status='pending' AND is_valid=1 "
             "ORDER BY priority",
             (str(wilaya_code),),
         ) as cur:
@@ -310,7 +314,7 @@ async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
             "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles "
-            "WHERE status IN ('pending', 'registered', 'pre-registered')"
+            "WHERE status IN ('pending', 'registered', 'pre-registered') AND is_valid=1"
         ) as cur:
             rows = await cur.fetchall()
             return [str(r[0]) for r in rows]
@@ -322,7 +326,7 @@ async def get_user_profile_wilayas(db_path: str, user_id: int) -> list[str]:
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
             "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles "
-            "WHERE user_id=? AND status IN ('pending', 'registered', 'pre-registered')",
+            "WHERE user_id=? AND status IN ('pending', 'registered', 'pre-registered') AND is_valid=1",
             (user_id,),
         ) as cur:
             rows = await cur.fetchall()
@@ -378,10 +382,10 @@ async def get_actionable_profiles_prioritized(
     )
     SELECT p.id, p.user_id, p.priority, p.name, p.nin, p.cnibe, p.phone, p.password,
            p.wilaya_id, p.wilaya_name, p.commune_code, p.commune_name, p.email, 
-           p.payment_method, p.status, p.created_at
+           p.payment_method, p.status, p.is_valid, p.created_at
     FROM profiles p
     JOIN UserSeniority us ON p.user_id = us.user_id
-    WHERE CAST(p.wilaya_id AS TEXT) = ? AND p.status IN ({placeholders})
+    WHERE CAST(p.wilaya_id AS TEXT) = ? AND p.status IN ({placeholders}) AND p.is_valid = 1
     ORDER BY us.first_profile_at ASC, p.priority ASC
     """
     
