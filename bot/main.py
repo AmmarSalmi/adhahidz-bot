@@ -10,7 +10,8 @@ warnings.filterwarnings("ignore", message=r".*per_message.*")
 
 from dotenv import load_dotenv
 from telegram import BotCommand
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import BadRequest, Forbidden, NetworkError, TelegramError
 
 from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy, on_admin_proxy_submenu
 
@@ -178,6 +179,24 @@ async def _post_shutdown(app: Application) -> None:
             logger.exception("Failed closing API client")
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a telegram message to notify the developer."""
+    logger = logging.getLogger(__name__)
+
+    # Ignore "Message is not modified" errors - these are harmless and usually
+    # caused by double-clicks on inline buttons.
+    if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
+        return
+
+    # Handle blocked bot errors gracefully
+    if isinstance(context.error, Forbidden):
+        logger.warning("Bot was blocked by a user (Forbidden error)")
+        return
+
+    # Log other errors
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+
 def main() -> None:
     load_dotenv()
     _configure_logging()
@@ -193,6 +212,8 @@ def main() -> None:
         .post_shutdown(_post_shutdown)
         .build()
     )
+
+    app.add_error_handler(error_handler)
 
     # Conversation handlers (must be added first for priority)
     app.add_handler(build_admin_broadcast_handler())
