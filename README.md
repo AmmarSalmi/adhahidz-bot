@@ -25,6 +25,7 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Intelligent UX Guardrails**: Prevents avoidable registration failures by implementing proactive input normalization and validation. The bot now intelligently recognizes and filters out common "skip" keywords (e.g., "skip", "aucun", "none", "لا") in multiple languages for optional fields like email, ensuring data sent to the API is always correctly formatted.
 - **Modernized PTB Compatibility**: Fully optimized for `python-telegram-bot` v20/v21. Includes resolved `ChatMemberStatus` imports and a specialized warning suppression engine in `bot/main.py` to keep the console output clean and focused on critical events.
 - **Robust Error Resilience**: Implemented a global exception handler that intelligently filters out harmless Telegram API errors (like "Message is not modified" from double-clicks) and gracefully handles blocked-bot scenarios. This ensures maximum uptime and a clean, high-signal log stream for production monitoring.
+- **Admin Error & Warning Inbox**: A centralized, persistent monitoring system that intercepts all `ERROR` and `WARNING` log events. Features real-time Telegram notifications for admins, a filterable paginated dashboard (by level, status, and date range), and a resolution tracking system to manage system health.
 
 ### Prerequisites
 - Docker + Docker Compose

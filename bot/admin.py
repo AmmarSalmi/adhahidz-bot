@@ -244,6 +244,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
             [InlineKeyboardButton("🌐 Proxy Settings ⚙️", callback_data="admin:proxy_submenu")],
             [InlineKeyboardButton("⚙️ Set Concurrency Limit", callback_data="admin:set_concurrency")],
+            [InlineKeyboardButton("📥 Error/Warning Inbox", callback_data="admin:inbox:0")],
             [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
         ]
     )
@@ -907,3 +908,207 @@ async def _gather_stats(db_path: str) -> dict:
         "profiles_week": profiles_week,
         "recent_history": recent_history,
     }
+
+
+# ---------------------------------------------------------------------------
+# Inbox Handlers
+# ---------------------------------------------------------------------------
+
+async def on_admin_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display the paginated and filterable admin inbox."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    # Callback data format: admin:inbox:<offset>[:level][:status][:date]
+    parts = query.data.split(":")
+    offset = int(parts[2]) if len(parts) > 2 else 0
+    level_filter = parts[3] if len(parts) > 3 and parts[3] != "all" else None
+    status_filter = parts[4] if len(parts) > 4 and parts[4] != "all" else None
+    date_filter = parts[5] if len(parts) > 5 and parts[5] != "all" else None
+
+    db_path = context.application.bot_data.get("db_path", "")
+    limit = 5
+    
+    entries = await db_mod.get_inbox_entries(
+        db_path, level=level_filter, status=status_filter, date_filter=date_filter, offset=offset, limit=limit
+    )
+    total = await db_mod.count_inbox_entries(db_path, level=level_filter, status=status_filter, date_filter=date_filter)
+
+    text = "📥 *Admin Inbox*\n"
+    if level_filter or status_filter or date_filter:
+        filters_str = []
+        if level_filter: filters_str.append(f"Level: `{level_filter}`")
+        if status_filter: filters_str.append(f"Status: `{status_filter}`")
+        if date_filter: filters_str.append(f"Date: `{date_filter}`")
+        text += f"Filters: {' | '.join(filters_str)}\n"
+    
+    text += f"Showing {offset + 1}-{min(offset + limit, total)} of {total} entries\n\n"
+
+    buttons = []
+    if not entries:
+        text += "_No entries found._"
+    else:
+        for entry in entries:
+            # Severity emoji
+            emoji = "🔴" if entry["level"] == "ERROR" else "⚠️"
+            # Status tag
+            status_tag = "✅" if entry["status"] == "resolved" else "🆕"
+            
+            # Message preview
+            msg = entry["message"]
+            preview = (msg[:40] + "...") if len(msg) > 40 else msg
+            
+            label = f"{status_tag} {emoji} {preview}"
+            buttons.append([InlineKeyboardButton(label, callback_data=f"admin:inbox_view:{entry['id']}")])
+
+    # Pagination buttons
+    nav_buttons = []
+    cb_suffix = f":{level_filter or 'all'}:{status_filter or 'all'}:{date_filter or 'all'}"
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin:inbox:{max(0, offset - limit)}{cb_suffix}"))
+    if offset + limit < total:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin:inbox:{offset + limit}{cb_suffix}"))
+    if nav_buttons:
+        buttons.append(nav_buttons)
+
+    # Filter buttons
+    filter_row_1 = [
+        InlineKeyboardButton("Level: " + (level_filter or "All"), callback_data=f"admin:inbox_filter_level:{offset}"),
+        InlineKeyboardButton("Status: " + (status_filter or "All"), callback_data=f"admin:inbox_filter_status:{offset}"),
+    ]
+    filter_row_2 = [
+        InlineKeyboardButton("Date: " + (date_filter or "All"), callback_data=f"admin:inbox_filter_date:{offset}"),
+    ]
+    buttons.append(filter_row_1)
+    buttons.append(filter_row_2)
+
+    buttons.append([InlineKeyboardButton("⬅️ Back to Admin Panel", callback_data="admin:back")])
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_inbox_filter_level(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show options to filter by level."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    
+    offset = query.data.split(":")[2]
+    
+    buttons = [
+        [InlineKeyboardButton("All Levels", callback_data=f"admin:inbox:{offset}:all:all:all")],
+        [InlineKeyboardButton("🔴 ERROR Only", callback_data=f"admin:inbox:{offset}:ERROR:all:all")],
+        [InlineKeyboardButton("⚠️ WARNING Only", callback_data=f"admin:inbox:{offset}:WARNING:all:all")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"admin:inbox:{offset}")]
+    ]
+    await query.edit_message_text("Filter by Level:", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def on_admin_inbox_filter_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show options to filter by status."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    
+    offset = query.data.split(":")[2]
+    
+    buttons = [
+        [InlineKeyboardButton("All Statuses", callback_data=f"admin:inbox:{offset}:all:all:all")],
+        [InlineKeyboardButton("🆕 Unresolved Only", callback_data=f"admin:inbox:{offset}:all:unresolved:all")],
+        [InlineKeyboardButton("✅ Resolved Only", callback_data=f"admin:inbox:{offset}:all:resolved:all")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"admin:inbox:{offset}")]
+    ]
+    await query.edit_message_text("Filter by Status:", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def on_admin_inbox_filter_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show options to filter by date."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    
+    offset = query.data.split(":")[2]
+    
+    buttons = [
+        [InlineKeyboardButton("All Time", callback_data=f"admin:inbox:{offset}:all:all:all")],
+        [InlineKeyboardButton("📅 Today", callback_data=f"admin:inbox:{offset}:all:all:today")],
+        [InlineKeyboardButton("📅 Last 7 Days", callback_data=f"admin:inbox:{offset}:all:all:week")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"admin:inbox:{offset}")]
+    ]
+    await query.edit_message_text("Filter by Date:", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def on_admin_inbox_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """View full details of an inbox entry."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    entry_id = int(query.data.split(":")[2])
+    db_path = context.application.bot_data.get("db_path", "")
+    
+    entry = await db_mod.get_inbox_entry(db_path, entry_id)
+    if not entry:
+        await query.edit_message_text("❌ Entry not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin:inbox:0")]]))
+        return
+
+    emoji = "🔴 ERROR" if entry["level"] == "ERROR" else "⚠️ WARNING"
+    status_tag = "✅ RESOLVED" if entry["status"] == "resolved" else "🆕 UNRESOLVED"
+    
+    text = (
+        f"{emoji} ({status_tag})\n"
+        f"📅 *Timestamp:* `{entry['created_at']}`\n"
+        f"💬 *Message:*\n`{entry['message']}`\n\n"
+    )
+    
+    if entry["resolved_at"]:
+        text += f"✅ *Resolved at:* `{entry['resolved_at']}`\n\n"
+
+    if entry["stack_trace"]:
+        # Only show part of stack trace if it's too long
+        trace = entry["stack_trace"]
+        if len(trace) > 1000:
+            trace = trace[:1000] + "\n... (truncated)"
+        text += f"🔍 *Stack Trace:*\n```python\n{trace}\n```"
+
+    buttons = []
+    if entry["status"] == "unresolved":
+        buttons.append([InlineKeyboardButton("✅ Mark as Resolved", callback_data=f"admin:inbox_resolve:{entry_id}")])
+    
+    buttons.append([InlineKeyboardButton("⬅️ Back to Inbox", callback_data="admin:inbox:0")])
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_inbox_resolve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mark an entry as resolved and return to view."""
+    query = update.callback_query
+    if not query:
+        return
+    
+    entry_id = int(query.data.split(":")[2])
+    db_path = context.application.bot_data.get("db_path", "")
+    
+    await db_mod.resolve_inbox_entry(db_path, entry_id)
+    await query.answer("✅ Entry marked as resolved.")
+    
+    # Refresh view
+    await on_admin_inbox_view(update, context)

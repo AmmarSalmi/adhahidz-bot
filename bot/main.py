@@ -13,7 +13,13 @@ from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import BadRequest, Forbidden, NetworkError, TelegramError
 
-from .admin import admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy, on_admin_proxy_submenu
+from .admin import (
+    admin_command, build_admin_broadcast_handler, on_admin_back, on_admin_stats, 
+    on_admin_toggle_restrict, on_admin_toggle_proxy, on_admin_test_proxy, 
+    on_admin_proxy_submenu, on_admin_inbox, on_admin_inbox_view, 
+    on_admin_inbox_resolve, on_admin_inbox_filter_level, on_admin_inbox_filter_status,
+    on_admin_inbox_filter_date
+)
 
 from .api_client import QuotaApiClient
 from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
@@ -34,6 +40,10 @@ from .profile_handlers import (
 from .registration import build_registration_handler
 from .scheduler import start_scheduler
 from .menu import menu_command, on_menu_nav, on_menu_cmd, handle_reply_menu
+from .logging_handler import AdminInboxHandler
+
+# Global reference to the inbox handler to update it later
+_inbox_handler: AdminInboxHandler | None = None
 
 
 def _configure_logging() -> None:
@@ -46,6 +56,13 @@ def _configure_logging() -> None:
     logging.getLogger("telegram").setLevel(logging.WARNING)
     # Also suppress apscheduler if it's too noisy
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
+
+    # Register Admin Inbox Handler
+    global _inbox_handler
+    db_path = os.getenv("DATABASE_PATH", "/data/subscriptions.db")
+    _inbox_handler = AdminInboxHandler(db_path)
+    _inbox_handler.setLevel(logging.WARNING)
+    logging.getLogger().addHandler(_inbox_handler)
 
 
 async def _load_wilayas(api: QuotaApiClient, db_path: str | None = None) -> list[tuple[str, str]]:
@@ -153,6 +170,10 @@ async def _post_init(app: Application) -> None:
         [BotCommand(cmd, desc) for cmd, desc in BOT_COMMANDS]
     )
 
+    # Update inbox handler with bot details for notifications
+    if _inbox_handler and ADMIN_TELEGRAM_ID:
+        _inbox_handler.set_bot_details(app.bot, ADMIN_TELEGRAM_ID)
+
     logger.info(
         "Bot started. Interval=%ss BaseURL=%s DB=%s",
         interval_s,
@@ -249,6 +270,12 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_toggle_restrict, pattern=r"^admin:toggle_restrict$"))
     app.add_handler(CallbackQueryHandler(on_admin_proxy_submenu, pattern=r"^admin:proxy_submenu$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox, pattern=r"^admin:inbox:"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox_view, pattern=r"^admin:inbox_view:"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox_resolve, pattern=r"^admin:inbox_resolve:"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_level, pattern=r"^admin:inbox_filter_level:"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_status, pattern=r"^admin:inbox_filter_status:"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_date, pattern=r"^admin:inbox_filter_date:"))
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))

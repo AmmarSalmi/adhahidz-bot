@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS quota_history (
   timestamp   TEXT    NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (wilaya_code) REFERENCES wilayas(code)
 );
+CREATE TABLE IF NOT EXISTS admin_inbox (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  level       TEXT    NOT NULL, -- 'ERROR' or 'WARNING'
+  message     TEXT    NOT NULL,
+  stack_trace TEXT,
+  status      TEXT    NOT NULL DEFAULT 'unresolved', -- 'unresolved' or 'resolved'
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
 """
 
 
@@ -315,3 +324,134 @@ async def add_quota_history_entry(db_path: str, wilaya_code: str, event_type: st
             await db.commit()
 
     await _with_retries(_op)
+async def add_inbox_entry(db_path: str, level: str, message: str, stack_trace: str | None) -> int:
+    """Insert a new error/warning entry into the admin inbox."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute(
+                "INSERT INTO admin_inbox (level, message, stack_trace) VALUES (?, ?, ?)",
+                (level, message, stack_trace),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+    return await _with_retries(_op)
+
+
+async def get_inbox_entries(
+    db_path: str, 
+    level: str | None = None, 
+    status: str | None = None, 
+    date_filter: str | None = None,
+    offset: int = 0, 
+    limit: int = 10
+) -> list[dict]:
+    """Retrieve a paginated list of inbox entries with optional filters."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        query = "SELECT id, level, message, status, created_at, resolved_at FROM admin_inbox"
+        params = []
+        where_clauses = []
+
+        if level:
+            where_clauses.append("level = ?")
+            params.append(level)
+        if status:
+            where_clauses.append("status = ?")
+            params.append(status)
+        
+        if date_filter == "today":
+            where_clauses.append("created_at >= date('now')")
+        elif date_filter == "week":
+            where_clauses.append("created_at >= date('now', '-7 days')")
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        async with db.execute(query, params) as cur:
+            rows = await cur.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "level": r[1],
+                    "message": r[2],
+                    "status": r[3],
+                    "created_at": r[4],
+                    "resolved_at": r[5],
+                }
+                for r in rows
+            ]
+
+
+async def count_inbox_entries(
+    db_path: str, 
+    level: str | None = None, 
+    status: str | None = None,
+    date_filter: str | None = None
+) -> int:
+    """Count total inbox entries matching the filters."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        query = "SELECT COUNT(*) FROM admin_inbox"
+        params = []
+        where_clauses = []
+
+        if level:
+            where_clauses.append("level = ?")
+            params.append(level)
+        if status:
+            where_clauses.append("status = ?")
+            params.append(status)
+        
+        if date_filter == "today":
+            where_clauses.append("created_at >= date('now')")
+        elif date_filter == "week":
+            where_clauses.append("created_at >= date('now', '-7 days')")
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        async with db.execute(query, params) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def get_inbox_entry(db_path: str, entry_id: int) -> dict | None:
+    """Retrieve full details for a single inbox entry."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT id, level, message, stack_trace, status, created_at, resolved_at FROM admin_inbox WHERE id = ?",
+            (entry_id,),
+        ) as cur:
+            r = await cur.fetchone()
+            if not r:
+                return None
+            return {
+                "id": r[0],
+                "level": r[1],
+                "message": r[2],
+                "stack_trace": r[3],
+                "status": r[4],
+                "created_at": r[5],
+                "resolved_at": r[6],
+            }
+
+
+async def resolve_inbox_entry(db_path: str, entry_id: int) -> bool:
+    """Mark an inbox entry as resolved."""
+    async def _op() -> bool:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute(
+                "UPDATE admin_inbox SET status = 'resolved', resolved_at = datetime('now') WHERE id = ?",
+                (entry_id,),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    return bool(await _with_retries(_op))
