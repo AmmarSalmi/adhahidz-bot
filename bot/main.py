@@ -20,7 +20,9 @@ from .admin import (
     on_admin_proxy_submenu, on_admin_inbox, on_admin_inbox_view, 
     on_admin_inbox_resolve, on_admin_inbox_filter_level, on_admin_inbox_filter_status,
     on_admin_inbox_filter_date, on_admin_force_check, on_admin_purge_blockers,
-    on_admin_notify_invalid_nins, on_admin_sync_orders
+    on_admin_notify_invalid_nins, on_admin_sync_orders, on_admin_inbox_mute_confirm,
+    on_admin_inbox_change_interval, on_admin_inbox_settings, on_admin_inbox_unmute,
+    on_admin_inbox_clear
 )
 
 from .api_client import QuotaApiClient
@@ -112,6 +114,14 @@ async def _post_init(app: Application) -> None:
     app.bot_data["max_concurrent_sessions"] = max_concurrent
     app.bot_data["check_interval_seconds"] = interval_s
     
+    # Load inbox settings from DB
+    from .db import get_global_setting
+    realtime_str = await get_global_setting(db_path, "inbox_realtime_enabled", "true")
+    app.bot_data["inbox_realtime_enabled"] = realtime_str.lower() == "true"
+    
+    interval_mins_str = await get_global_setting(db_path, "inbox_report_interval_mins", "60")
+    app.bot_data["inbox_report_interval_mins"] = int(interval_mins_str)
+
     # Global semaphore for auto-registration connections
     import asyncio
     app.bot_data["concurrency_semaphore"] = asyncio.Semaphore(max_concurrent)
@@ -174,7 +184,7 @@ async def _post_init(app: Application) -> None:
 
     # Update inbox handler with bot details for notifications
     if _inbox_handler and ADMIN_TELEGRAM_ID:
-        _inbox_handler.set_bot_details(app.bot, ADMIN_TELEGRAM_ID)
+        _inbox_handler.set_bot_details(app.bot, ADMIN_TELEGRAM_ID, app)
 
     logger.info(
         "Bot started. Interval=%ss BaseURL=%s DB=%s",
@@ -296,6 +306,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_level, pattern=r"^admin:inbox_filter_level:"))
     app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_status, pattern=r"^admin:inbox_filter_status:"))
     app.add_handler(CallbackQueryHandler(on_admin_inbox_filter_date, pattern=r"^admin:inbox_filter_date:"))
+    app.add_handler(CallbackQueryHandler(on_admin_inbox_clear, pattern=r"^admin:inbox_clear$"))
     app.add_handler(CallbackQueryHandler(on_admin_notify_invalid_nins, pattern=r"^admin:notify_invalid_nins$"))
     app.add_handler(CallbackQueryHandler(on_admin_sync_orders, pattern=r"^admin:sync_orders$"))
 

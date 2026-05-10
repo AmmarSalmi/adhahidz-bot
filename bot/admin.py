@@ -46,6 +46,7 @@ AWAIT_PROXY_TEST_CONFIG = 3
 AWAIT_CONCURRENCY_LIMIT = 4
 AWAIT_WILAYA_INTERVAL = 5
 AWAIT_PROFILE_ID_CHECK = 6
+AWAIT_INBOX_REPORT_INTERVAL = 7
 
 # ---------------------------------------------------------------------------
 # Admin identity — loaded once from env at import time
@@ -275,6 +276,7 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🧹 Purge Blocking Users", callback_data="admin:purge_blockers")],
             [InlineKeyboardButton("📢 Notify Invalid NINs", callback_data="admin:notify_invalid_nins")],
             [InlineKeyboardButton("📥 Error/Warning Inbox", callback_data="admin:inbox:0")],
+            [InlineKeyboardButton("📨 Inbox Settings ⚙️", callback_data="admin:inbox_settings")],
             [InlineKeyboardButton("🧪 Test Proxy (Custom)", callback_data="admin:test_proxy")],
         ]
     )
@@ -918,7 +920,11 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             CallbackQueryHandler(on_admin_test_proxy, pattern=r"^admin:test_proxy$"),
             CallbackQueryHandler(on_admin_set_concurrency, pattern=r"^admin:set_concurrency$"),
             CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:wilaya$"),
-            CallbackQueryHandler(on_admin_check_profile_start, pattern=r"^admin:check_profile_start$")
+            CallbackQueryHandler(on_admin_check_profile_start, pattern=r"^admin:check_profile_start$"),
+            CallbackQueryHandler(on_admin_inbox_mute_confirm, pattern=r"^admin:inbox_mute_confirm$"),
+            CallbackQueryHandler(on_admin_inbox_change_interval, pattern=r"^admin:inbox_change_interval$"),
+            CallbackQueryHandler(on_admin_inbox_settings, pattern=r"^admin:inbox_settings$"),
+            CallbackQueryHandler(on_admin_inbox_unmute, pattern=r"^admin:inbox_unmute$"),
         ],
         states={
             AWAIT_BROADCAST_MESSAGE: [
@@ -944,8 +950,13 @@ def build_admin_broadcast_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_check_profile_received),
                 CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
             ],
+            AWAIT_INBOX_REPORT_INTERVAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_inbox_report_interval_received),
+                CallbackQueryHandler(on_admin_inbox_settings, pattern=r"^admin:back_to_inbox_settings$")
+            ],
         },
         fallbacks=[
+            CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"),
             CallbackQueryHandler(on_admin_broadcast_confirm, pattern=r"^admin:broadcast_cancel$")
         ],
         per_message=False,
@@ -1118,6 +1129,9 @@ async def on_admin_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ]
     buttons.append(filter_row_1)
     buttons.append(filter_row_2)
+    
+    # Clear Inbox button
+    buttons.append([InlineKeyboardButton("🧹 Clear Inbox (Soft Delete)", callback_data="admin:inbox_clear")])
 
     buttons.append([InlineKeyboardButton("⬅️ Back to Admin Panel", callback_data="admin:back")])
 
@@ -1243,6 +1257,141 @@ async def on_admin_inbox_resolve(update: Update, context: ContextTypes.DEFAULT_T
     
     # Refresh view
     await on_admin_inbox_view(update, context)
+
+
+async def on_admin_inbox_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Soft-delete all inbox entries."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    db_path = context.application.bot_data.get("db_path", "")
+    count = await db_mod.hide_all_inbox_entries(db_path)
+    
+    await query.answer(f"🧹 {count} entries hidden.")
+    # Return to first page of inbox
+    await on_admin_inbox(update, context)
+
+
+async def on_admin_inbox_mute_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ask for interval after muting real-time notifications."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    db_path = context.application.bot_data.get("db_path", "")
+    await db_mod.set_global_setting(db_path, "inbox_realtime_enabled", "false")
+    context.application.bot_data["inbox_realtime_enabled"] = False
+
+    await query.edit_message_text(
+        "🔇 *Real-time Notifications Muted*\n\n"
+        "To prevent clogging during bursts, I will now only send periodic summary reports.\n\n"
+        "Please enter the reporting interval in **minutes** (e.g., `60` for hourly, `1440` for daily):",
+        parse_mode="Markdown",
+    )
+    return AWAIT_INBOX_REPORT_INTERVAL
+
+
+async def on_admin_inbox_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display inbox notification settings."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    realtime = context.application.bot_data.get("inbox_realtime_enabled", True)
+    interval = context.application.bot_data.get("inbox_report_interval_mins", 60)
+
+    status_text = "✅ Enabled" if realtime else "🔇 Muted (Scheduled)"
+    
+    text = (
+        "📨 *Inbox Notification Settings*\n\n"
+        f"• Real-time Alerts: *{status_text}*\n"
+        f"• Summary Interval: *{interval} minutes*\n\n"
+        "When real-time alerts are muted, I will collect all unresolved errors and warnings "
+        "and send you a summary report at the specified interval."
+    )
+
+    buttons = []
+    if realtime:
+        buttons.append([InlineKeyboardButton("🔇 Mute Real-time Alerts", callback_data="admin:inbox_mute_confirm")])
+    else:
+        buttons.append([InlineKeyboardButton("🔔 Enable Real-time Alerts", callback_data="admin:inbox_unmute")])
+        buttons.append([InlineKeyboardButton("⏱️ Change Report Interval", callback_data="admin:inbox_change_interval")])
+    
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="admin:back")])
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_inbox_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Re-enable real-time notifications."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer("Real-time alerts enabled!")
+
+    db_path = context.application.bot_data.get("db_path", "")
+    await db_mod.set_global_setting(db_path, "inbox_realtime_enabled", "true")
+    context.application.bot_data["inbox_realtime_enabled"] = True
+    
+    # Also stop the reporting job if it exists
+    from .scheduler import stop_inbox_report_job
+    stop_inbox_report_job(context.application)
+
+    await on_admin_inbox_settings(update, context)
+
+
+async def on_admin_inbox_change_interval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ask for new report interval."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    await query.edit_message_text(
+        "⏱️ *Set Summary Report Interval*\n\n"
+        "Please enter the interval in **minutes**:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin:back_to_inbox_settings")]]),
+        parse_mode="Markdown",
+    )
+    return AWAIT_INBOX_REPORT_INTERVAL
+
+
+async def on_admin_inbox_report_interval_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Update the report interval and reschedule the job."""
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_INBOX_REPORT_INTERVAL
+
+    try:
+        mins = int(msg.text.strip())
+        if mins < 1:
+            raise ValueError()
+    except ValueError:
+        await msg.reply_text("❌ Please enter a valid positive number of minutes.")
+        return AWAIT_INBOX_REPORT_INTERVAL
+
+    db_path = context.application.bot_data.get("db_path", "")
+    await db_mod.set_global_setting(db_path, "inbox_report_interval_mins", str(mins))
+    context.application.bot_data["inbox_report_interval_mins"] = mins
+
+    # Reschedule/Start the reporting job
+    from .scheduler import update_inbox_report_interval
+    update_inbox_report_interval(context.application, mins)
+
+    await msg.reply_text(
+        f"✅ Report interval set to *{mins} minutes*.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Return to Settings", callback_data="admin:inbox_settings")]])
+    )
+    return ConversationHandler.END
 
 
 async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

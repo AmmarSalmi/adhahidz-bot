@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS admin_inbox (
   stack_trace TEXT,
   status      TEXT    NOT NULL DEFAULT 'unresolved', -- 'unresolved' or 'resolved'
   created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-  resolved_at TEXT
+  resolved_at TEXT,
+  is_hidden   INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sync_history (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +59,10 @@ CREATE TABLE IF NOT EXISTS sync_history (
   user_id     INTEGER,
   details     TEXT,
   created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS global_settings (
+  key         TEXT    PRIMARY KEY,
+  value       TEXT
 );
 """
 
@@ -360,7 +365,7 @@ async def get_inbox_entries(
         await db.execute("PRAGMA busy_timeout=3000;")
         query = "SELECT id, level, message, status, created_at, resolved_at FROM admin_inbox"
         params = []
-        where_clauses = []
+        where_clauses = ["is_hidden = 0"]
 
         if level:
             where_clauses.append("level = ?")
@@ -406,7 +411,7 @@ async def count_inbox_entries(
         await db.execute("PRAGMA busy_timeout=3000;")
         query = "SELECT COUNT(*) FROM admin_inbox"
         params = []
-        where_clauses = []
+        where_clauses = ["is_hidden = 0"]
 
         if level:
             where_clauses.append("level = ?")
@@ -493,3 +498,38 @@ async def add_sync_event(db_path: str, event_type: str, profile_id: int | None =
             await db.commit()
 
     await _with_retries(_op)
+
+
+async def get_global_setting(db_path: str, key: str, default: str | None = None) -> str | None:
+    """Retrieve a global setting value."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute("SELECT value FROM global_settings WHERE key = ?", (key,)) as cur:
+            row = await cur.fetchone()
+            return str(row[0]) if row else default
+
+
+async def set_global_setting(db_path: str, key: str, value: str) -> None:
+    """Update or insert a global setting."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute(
+                "INSERT INTO global_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            await db.commit()
+
+    await _with_retries(_op)
+
+
+async def hide_all_inbox_entries(db_path: str) -> int:
+    """Soft-delete all current inbox entries by marking them as hidden."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute("UPDATE admin_inbox SET is_hidden = 1 WHERE is_hidden = 0")
+            await db.commit()
+            return cur.rowcount
+
+    return await _with_retries(_op)

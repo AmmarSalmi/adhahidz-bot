@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import traceback
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from telegram import Bot
+    from telegram.ext import Application
 
 from . import db as db_mod
 
@@ -20,11 +21,13 @@ class AdminInboxHandler(logging.Handler):
         self.db_path = db_path
         self.bot: Bot | None = None
         self.admin_id: int | None = None
+        self.application: Application | None = None
 
-    def set_bot_details(self, bot: Bot, admin_id: int) -> None:
+    def set_bot_details(self, bot: Bot, admin_id: int, application: Application) -> None:
         """Update the handler with bot instance and admin ID for notifications."""
         self.bot = bot
         self.admin_id = admin_id
+        self.application = application
 
     def emit(self, record: logging.LogRecord) -> None:
         # Avoid intercepting logs from the logging system itself or from this module
@@ -61,6 +64,14 @@ class AdminInboxHandler(logging.Handler):
 
             # 2. Notify Admin via Telegram
             if self.bot and self.admin_id:
+                # Check if real-time notifications are enabled
+                realtime_enabled = True
+                if self.application:
+                    realtime_enabled = self.application.bot_data.get("inbox_realtime_enabled", True)
+                
+                if not realtime_enabled:
+                    return
+
                 emoji = "🔴 ERROR" if level == "ERROR" else "⚠️ WARNING"
                 
                 # Truncate message for the brief notification
@@ -69,10 +80,14 @@ class AdminInboxHandler(logging.Handler):
                 text = f"{emoji}\n\n{preview}"
                 
                 try:
+                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔇 Mute Real-time", callback_data="admin:inbox_mute_confirm")]
+                    ])
                     await self.bot.send_message(
                         chat_id=self.admin_id,
                         text=text,
-                        # No Markdown here to avoid parsing errors if the message contains special characters
+                        reply_markup=keyboard,
                     )
                 except Exception:
                     # Ignore notification errors to avoid side effects

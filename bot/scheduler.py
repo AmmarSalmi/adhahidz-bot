@@ -204,6 +204,84 @@ async def remove_excess_profiles_job(app, db_path: str) -> None:
         logger.exception("Failed running excess profile removal job.")
 
 
+async def send_inbox_report_job(app) -> None:
+    """Send a summary of unresolved inbox entries to the admin."""
+    logger.info("Running periodic inbox summary report job...")
+    db_path = app.bot_data.get("db_path", "")
+    admin_id = app.bot_data.get("admin_id")
+    
+    if not admin_id:
+        return
+
+    try:
+        # Count unresolved entries
+        error_count = await db_mod.count_inbox_entries(db_path, level="ERROR", status="unresolved")
+        warning_count = await db_mod.count_inbox_entries(db_path, level="WARNING", status="unresolved")
+        
+        if error_count == 0 and warning_count == 0:
+            logger.info("No unresolved entries to report.")
+            return
+
+        text = (
+            "📊 *Periodic Inbox Summary*\n\n"
+            f"You have new unresolved items in the error inbox:\n"
+            f"• 🔴 ERRORS: *{error_count}*\n"
+            f"• ⚠️ WARNINGS: *{warning_count}*\n\n"
+            "Please check the admin panel to view and resolve them."
+        )
+        
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📥 View Inbox", callback_data="admin:inbox:0")],
+            [InlineKeyboardButton("📨 Inbox Settings", callback_data="admin:inbox_settings")]
+        ])
+
+        await app.bot.send_message(
+            chat_id=admin_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        logger.info("Inbox summary report sent to admin.")
+    except Exception:
+        logger.exception("Failed to run inbox summary report job")
+
+
+def update_inbox_report_interval(app, interval_mins: int):
+    """Start or reschedule the periodic inbox report job."""
+    scheduler = app.bot_data.get("scheduler")
+    if not scheduler:
+        return
+
+    try:
+        if scheduler.get_job("inbox_report"):
+            scheduler.reschedule_job("inbox_report", trigger='interval', minutes=interval_mins)
+            logger.info("Rescheduled inbox_report to every %d minutes", interval_mins)
+        else:
+            scheduler.add_job(
+                send_inbox_report_job,
+                "interval",
+                args=[app],
+                minutes=interval_mins,
+                id="inbox_report",
+                max_instances=1,
+                misfire_grace_time=300
+            )
+            logger.info("Started inbox_report every %d minutes", interval_mins)
+    except Exception:
+        logger.exception("Failed to update inbox_report job")
+
+
+def stop_inbox_report_job(app):
+    """Remove the periodic inbox report job."""
+    scheduler = app.bot_data.get("scheduler")
+    if scheduler and scheduler.get_job("inbox_report"):
+        try:
+            scheduler.remove_job("inbox_report")
+            logger.info("Stopped inbox_report job.")
+        except Exception:
+            logger.exception("Failed to stop inbox_report job")
+
 
 def update_poll_interval(app, new_interval_s: int):
     """Reschedule the quota poll job with a new interval."""
@@ -298,4 +376,11 @@ def start_scheduler(
 
     scheduler.start()
     logger.info("Scheduler started: poll every %ss, pre-registered reminder every 12h", interval_s)
+
+    # Start inbox report if real-time notifications are muted
+    realtime = app.bot_data.get("inbox_realtime_enabled", True)
+    if not realtime:
+        interval_mins = app.bot_data.get("inbox_report_interval_mins", 60)
+        update_inbox_report_interval(app, interval_mins)
+
     return scheduler
