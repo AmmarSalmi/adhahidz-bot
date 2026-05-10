@@ -370,7 +370,7 @@ async def on_commune_selected(
     await query.edit_message_text(
         f"✅ Commune *{commune_name}* selected.\n\n"
         "Step 6/10 — Enter a *password* for your adhahi.dz account:\n"
-        "_(8-12 characters, must include upper, lower, digit, and symbol)_",
+        "_(8-12 characters, must include upper, lower, digit, and symbol from @#$%^&+=)_",
         parse_mode="Markdown",
     )
     return ASK_PASSWORD
@@ -533,8 +533,8 @@ def _validate_password(pw: str) -> list[str]:
         errors.append("Must contain at least one lowercase letter (a-z)")
     if not any(c.isupper() for c in pw):
         errors.append("Must contain at least one uppercase letter (A-Z)")
-    if not any(c in "!@#$%^&*()_+-=" for c in pw):
-        errors.append("Must contain at least one special character (!@#$%^&*()_+-=)")
+    if not any(c in "@#$%^&+=" for c in pw):
+        errors.append("Must contain at least one special character from: @ # $ % ^ & + =")
     if any(c.isspace() for c in pw):
         errors.append("Must not contain whitespace")
     return errors
