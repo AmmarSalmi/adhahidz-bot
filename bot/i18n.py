@@ -89,6 +89,7 @@ _TRANSLATIONS = {
         "Your spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation": "لقد تم تأمين مكانك! استخدم الموقع الرسمي لإكمال التحقق من رمز OTP عندما تكون جاهزاً: \n🔗 https://adhahi.dz/activation",
         "✅ *Registration submitted for {profile.name}!*\n\nYour spot is secured! Use the official website to verify when ready:\n🔗 https://adhahi.dz/activation": "✅ تم تقديم التسجيل لـ {profile.name}!* \n\nلقد تم تأمين مكانك! استخدم الموقع الرسمي للتحقق عندما تكون جاهزاً: \n🔗 https://adhahi.dz/activation",
         "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`": "🎉 *تهانينا! تم تأمين الطلب!* \n\nالملف: *{name}*\n\nلقد تأكدت من أنك قد أتممت حجز طلب لهذا الملف بنجاح! \n\nيرجى تسجيل الدخول إلى الموقع الرسمي لعرض تفاصيل طلبك وإكمال أي خطوات متبقية:\n\n🔗 https://adhahi.dz/login\n\n*تذكير ببيانات الدخول الخاصة بك:* \n💳 رقم التعريف الوطني: `{nin}`\n🔑 كلمة المرور: `{password}`",
+        "This bot is for testing only, not for public use.": "هذا البوت مخصص للاختبار فقط، وليس للاستخدام العام.",
     },
     "fr": {
         "Welcome! I couldn't load the Wilaya list yet (API unavailable). Send /change later to try again.": "Bienvenue ! Je n'ai pas pu charger la liste des Wilayas. Envoyez /change plus tard.",
@@ -160,6 +161,7 @@ _TRANSLATIONS = {
         "Your spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation": "Votre place est réservée ! Utilisez le site officiel pour compléter la vérification OTP quand vous serez prêt : \n🔗 https://adhahi.dz/activation",
         "✅ *Registration submitted for {profile.name}!*\n\nYour spot is secured! Use the official website to verify when ready:\n🔗 https://adhahi.dz/activation": "✅ Inscription soumise pour {profile.name} !* \n\nVotre place est réservée ! Utilisez le site officiel pour vérifier quand vous serez prêt : \n🔗 https://adhahi.dz/activation",
         "🎉 *Congratulations! Order Secured!* \n\nProfile: *{name}*\n\nI have confirmed that you have successfully secured an order for this profile! \n\nPlease log into the official website to view your order details and complete any remaining steps:\n\n🔗 https://adhahi.dz/login\n\n*Reminder of your credentials:* \n💳 NIN: `{nin}`\n🔑 Password: `{password}`": "🎉 *Félicitations ! Commande Sécurisée !* \n\nProfil : *{name}*\n\nJ'ai confirmé que vous avez réussi à sécuriser une commande pour ce profil ! \n\nVeuillez vous connecter au site officiel pour consulter les détails de votre commande et finaliser les étapes restantes :\n\n🔗 https://adhahi.dz/login\n\n*Rappel de vos identifiants :* \n💳 NIN : `{nin}`\n🔑 Mot de passe : `{password}`",
+        "This bot is for testing only, not for public use.": "Ce bot est destiné aux tests uniquement, pas à un usage public.",
     }
 }
 

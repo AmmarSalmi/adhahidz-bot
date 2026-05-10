@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 
 from . import db as db_mod
 from . import profile_db
-from .admin import ADMIN_TELEGRAM_ID, check_restricted, is_admin
+from .admin import ADMIN_TELEGRAM_ID, check_restricted, check_private_mode, is_admin
 from .api_client import QuotaStatus
 from .captcha_solver import LocalOcrSolver, TwoCaptchaSolver
 from .registration import _build_headers, _get_http_client
@@ -94,6 +94,8 @@ async def _ensure_wilayas_loaded(context: ContextTypes.DEFAULT_TYPE) -> list[tup
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_private_mode(update, context):
+        return
     lang = await get_lang(context, update.effective_user.id)
     from .menu import get_reply_main_menu_keyboard
     
@@ -118,6 +120,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_private_mode(update, context):
+        return
     lang = await get_lang(context, update.effective_user.id)
     wilayas = await _ensure_wilayas_loaded(context)
     if not wilayas:

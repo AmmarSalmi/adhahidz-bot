@@ -94,16 +94,42 @@ def is_restricted_mode(context) -> bool:
     return bool(context.application.bot_data.get("restricted_mode", False))
 
 
+def is_private_mode(context) -> bool:
+    """Return True if the bot is currently in private mode (admin-only)."""
+    return bool(context.application.bot_data.get("private_mode", False))
 
+
+async def check_private_mode(update: Update, context) -> bool:
+    """Guard for non-admin users when private mode is active.
+
+    Returns True if the user is *blocked* (i.e. private mode is on
+    and the user is not the admin).
+    """
+    if not is_private_mode(context):
+        return False
+    if is_admin(update):
+        return False
+
+    from .i18n import get_lang, t
+    user_id = update.effective_user.id
+    lang = await get_lang(context, user_id)
+    
+    await update.effective_message.reply_text(
+        t(lang, "This bot is for testing only, not for public use.")
+    )
+    return True
 
 
 async def check_restricted(update: Update, context) -> bool:
-    """Guard for non-admin users when restricted mode is active.
+    """Guard for non-admin users when restricted or private mode is active.
 
-    Returns True if the user is *blocked* (i.e. restricted mode is on
-    and the user is not the admin).  The caller should ``return`` early
+    Returns True if the user is *blocked*. The caller should ``return`` early
     when this returns True.
     """
+    # Private mode takes precedence and is stricter
+    if await check_private_mode(update, context):
+        return True
+
     if not is_restricted_mode(context):
         return False  # not restricted — allow
     if is_admin(update):
@@ -271,12 +297,16 @@ def _admin_keyboard(context) -> InlineKeyboardMarkup:
 def _users_submenu_keyboard(context) -> InlineKeyboardMarkup:
     """Build the users control submenu keyboard."""
     restricted = is_restricted_mode(context)
+    private = is_private_mode(context)
+    
     toggle_restrict = "🔓 Unrestrict Users" if restricted else "🔒 Restrict Users"
+    toggle_private = "🔓 Disable Private Mode" if private else "🛡️ Enable Private Mode"
     
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 User Statistics", callback_data="admin:stats")],
         [InlineKeyboardButton("📢 Message All Users", callback_data="admin:broadcast_start")],
         [InlineKeyboardButton(toggle_restrict, callback_data="admin:toggle_restrict")],
+        [InlineKeyboardButton(toggle_private, callback_data="admin:toggle_private")],
         [InlineKeyboardButton("🧹 Purge Blocking Users", callback_data="admin:purge_blockers")],
         [InlineKeyboardButton("📢 Notify Invalid NINs", callback_data="admin:notify_invalid_nins")],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
@@ -360,9 +390,20 @@ async def on_admin_users_submenu(
         await query.edit_message_text("⛔ Access denied.")
         return
 
+    restricted = is_restricted_mode(context)
+    private = is_private_mode(context)
+    
+    status_lines = []
+    if private:
+        status_lines.append("🛡️ *Private Mode: ON* (Admin-only)")
+    if restricted:
+        status_lines.append("🔒 *Restricted Mode: ON*")
+    
+    status_text = "\n".join(status_lines) if status_lines else "🔓 *Public Mode* (Full access)"
+
     keyboard = _users_submenu_keyboard(context)
     await query.edit_message_text(
-        "👤 *Users Control*\n\nManage user access, statistics, and broadcasts.",
+        f"👤 *Users Control*\n\n{status_text}\n\nManage user access, statistics, and broadcasts.",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -450,13 +491,58 @@ async def on_admin_toggle_restrict(
 
     logger.info("Admin toggled restricted_mode → %s", new_state)
 
-    status_emoji = "🔒" if new_state else "🔓"
-    status_text = "ON — users are restricted" if new_state else "OFF — users have full access"
+    restricted = is_restricted_mode(context)
+    private = is_private_mode(context)
+    
+    status_lines = []
+    if private:
+        status_lines.append("🛡️ *Private Mode: ON* (Admin-only)")
+    if restricted:
+        status_lines.append("🔒 *Restricted Mode: ON*")
+    
+    status_text = "\n".join(status_lines) if status_lines else "🔓 *Public Mode* (Full access)"
 
     keyboard = _users_submenu_keyboard(context)
     await query.edit_message_text(
-        f"👤 *Users Control*\n\n"
-        f"{status_emoji} Restricted mode: *{status_text}*",
+        f"👤 *Users Control*\n\n{status_text}\n\nManage user access, statistics, and broadcasts.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_toggle_private(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Toggle private mode on or off."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    current = is_private_mode(context)
+    context.application.bot_data["private_mode"] = not current
+    new_state = not current
+
+    logger.info("Admin toggled private_mode → %s", new_state)
+
+    restricted = is_restricted_mode(context)
+    private = is_private_mode(context)
+    
+    status_lines = []
+    if private:
+        status_lines.append("🛡️ *Private Mode: ON* (Admin-only)")
+    if restricted:
+        status_lines.append("🔒 *Restricted Mode: ON*")
+    
+    status_text = "\n".join(status_lines) if status_lines else "🔓 *Public Mode* (Full access)"
+
+    keyboard = _users_submenu_keyboard(context)
+    await query.edit_message_text(
+        f"👤 *Users Control*\n\n{status_text}\n\nManage user access, statistics, and broadcasts.",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )

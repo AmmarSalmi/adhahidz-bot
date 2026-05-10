@@ -23,7 +23,7 @@ from .admin import (
     on_admin_notify_invalid_nins, on_admin_sync_orders, on_admin_inbox_mute_confirm,
     on_admin_inbox_change_interval, on_admin_inbox_settings, on_admin_inbox_unmute,
     on_admin_inbox_clear, on_admin_users_submenu, on_admin_profiles_submenu,
-    on_admin_infra_submenu, on_admin_inbox_submenu
+    on_admin_infra_submenu, on_admin_inbox_submenu, on_admin_toggle_private
 )
 
 from .api_client import QuotaApiClient
@@ -307,6 +307,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"))
     app.add_handler(CallbackQueryHandler(on_admin_purge_blockers, pattern=r"^admin:purge_blockers$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_restrict, pattern=r"^admin:toggle_restrict$"))
+    app.add_handler(CallbackQueryHandler(on_admin_toggle_private, pattern=r"^admin:toggle_private$"))
     app.add_handler(CallbackQueryHandler(on_admin_proxy_submenu, pattern=r"^admin:proxy_submenu$"))
     app.add_handler(CallbackQueryHandler(on_admin_toggle_proxy, pattern=r"^admin:toggle_proxy:"))
     app.add_handler(CallbackQueryHandler(on_admin_inbox, pattern=r"^admin:inbox:"))

@@ -2,6 +2,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKe
 from telegram.ext import ContextTypes
 
 from .handlers import status, change, stop, fetchinfo, help_command, checkprofile
+from .admin import check_private_mode
 from .profile_handlers import list_profiles, deleteprofile, viewprofile, editprofile
 from .i18n import t, get_lang
 
@@ -54,12 +55,16 @@ def get_settings_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     ])
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_private_mode(update, context):
+        return
     lang = await get_lang(context, update.effective_user.id)
     text = t(lang, "📱 *Main Menu*\nSelect an option below:")
     keyboard = get_reply_main_menu_keyboard(lang)
     await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_private_mode(update, context):
+        return
     lang = await get_lang(context, update.effective_user.id)
     text = t(lang, "📱 *Main Menu*\nSelect an option below:")
     keyboard = get_main_menu_keyboard(lang)
@@ -69,6 +74,8 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
 async def on_menu_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_private_mode(update, context):
+        return
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -94,6 +101,8 @@ async def on_menu_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.edit_message_text(t(lang, "Select language / اختر اللغة / Choisissez la langue:"), reply_markup=kb)
 
 async def on_menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await check_private_mode(update, context):
+        return
     query = update.callback_query
     # Acknowledge the button press
     await query.answer()
