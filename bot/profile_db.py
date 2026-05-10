@@ -390,3 +390,16 @@ async def get_actionable_profiles_prioritized(
         async with db.execute(query, (str(wilaya_code), *statuses)) as cur:
             rows = await cur.fetchall()
             return [_row_to_profile(r) for r in rows]
+
+async def reset_registering_profiles(db_path: str) -> int:
+    """Reset all 'registering' profiles to 'pending' at startup. Returns count."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute(
+                "UPDATE profiles SET status='pending' WHERE status='registering'"
+            )
+            await db.commit()
+            return cur.rowcount
+
+    return await _with_retries(_op)

@@ -113,6 +113,7 @@ async def _try_submit_profile(
       "submitted"    — 2xx or 425 (spot secured)
       "captcha_fail" — all attempts exhausted
       "ip_blocked"   — server returned 429/403
+      "quota_closed" — server returned 'Quota is not active'
       "error"        — other server error
     """
     body = {
@@ -178,6 +179,10 @@ async def _try_submit_profile(
             if any(term in error_msg.lower() for term in ["déjà actif", "already active", "déjà enregistré", "already registered", "déjà inscrit"]):
                 logger.info("Profile %s is already registered on server: %s", profile.id, error_msg)
                 return profile, "already_registered", error_msg
+
+            if "quota" in error_msg.lower() and "active" in error_msg.lower():
+                logger.info("Profile %s rejected: Quota is not active.", profile.id)
+                return profile, "quota_closed", error_msg
 
             logger.warning(
                 "Profile %s rejected by server (not CAPTCHA): %s",
@@ -690,6 +695,18 @@ async def _process_user_profiles(
             elif outcome == "captcha_fail":
                 await profile_db.set_profile_status(db_path, profile.id, "pending")
                 remaining.append(profile)
+            elif outcome == "quota_closed":
+                await profile_db.set_profile_status(db_path, profile.id, "pending")
+                masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"⏳ *Registration missed for {profile.name or masked}*\n\n"
+                        f"The quota closed while I was solving the CAPTCHA.\n"
+                        "I've reset the profile to *pending*. Will try again immediately when it re-opens!"
+                    ),
+                    parse_mode="Markdown",
+                )
             else:
                 await profile_db.set_profile_status(db_path, profile.id, "failed")
                 await app.bot.send_message(
@@ -766,6 +783,18 @@ async def _process_user_profiles(
                     elif outcome == "captcha_fail":
                         # Queue manual CAPTCHA for user
                         await _send_manual_captcha(app, user_id, profile, client, base_headers, db_path)
+                    elif outcome == "quota_closed":
+                        await profile_db.set_profile_status(db_path, profile.id, "pending")
+                        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+                        await app.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"⏳ *Registration missed (Phase 2) for {profile.name or masked}*\n\n"
+                                f"The quota closed while I was solving the CAPTCHA.\n"
+                                "I've reset the profile to *pending*. Will try again when it re-opens!"
+                            ),
+                            parse_mode="Markdown",
+                        )
                     else:
                         await profile_db.set_profile_status(db_path, profile.id, "failed")
                         await app.bot.send_message(

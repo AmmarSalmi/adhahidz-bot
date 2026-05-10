@@ -107,7 +107,7 @@ async def _poll_once(
                             len(actionable_profiles),
                             wilaya_code,
                         )
-                        await auto_submit_profiles(app, actionable_profiles)
+                        asyncio.create_task(auto_submit_profiles(app, actionable_profiles))
                 except Exception:
                     logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
             else:

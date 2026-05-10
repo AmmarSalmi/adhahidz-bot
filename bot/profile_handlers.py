@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -294,8 +295,16 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     text = update.message.text.strip()
     state = _ap_state(context)
 
-    if text == "-" or text == "":
+    # Handle common skip keywords
+    if text.lower() in ("-", "skip", "none", "aucun", "no", "لا"):
         state["email"] = ""
+    elif not _validate_email(text):
+        await update.message.reply_text(
+            "❌ *Invalid email format.*\n\n"
+            "Please enter a valid email address or send `-` to skip:",
+            parse_mode="Markdown"
+        )
+        return AP_EMAIL
     else:
         state["email"] = text
 
@@ -648,8 +657,11 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await update.message.reply_text(f"❌ Invalid password:\n{bullet_list}\n\nTry again:")
             return EDIT_WAITING_VALUE
     elif field == "email":
-        if text == "-":
+        if text.lower() in ("-", "skip", "none", "aucun", "no", "لا"):
             text = ""
+        elif not _validate_email(text):
+            await update.message.reply_text("❌ Invalid email format. Try again or send `-` to skip:")
+            return EDIT_WAITING_VALUE
 
     db_path: str = context.application.bot_data["db_path"]
     user_id = update.effective_user.id
@@ -749,6 +761,14 @@ async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     lang = await get_lang(context, update.effective_user.id)
     await update.effective_message.reply_text(t(lang, "Edit cancelled."))
     return ConversationHandler.END
+
+
+def _validate_email(email: str) -> bool:
+    """Return True if email is valid or empty."""
+    if not email:
+        return True
+    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    return bool(re.match(pattern, email))
 
 
 def build_editprofile_handler() -> ConversationHandler:

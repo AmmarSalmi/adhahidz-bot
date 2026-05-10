@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
+
+# Silence redundant ConversationHandler warnings about per_message settings
+# because we use a mix of MessageHandlers and CallbackQueryHandlers.
+warnings.filterwarnings("ignore", message=r".*per_message.*")
 
 from dotenv import load_dotenv
 from telegram import BotCommand
@@ -74,6 +79,10 @@ async def _post_init(app: Application) -> None:
     max_concurrent = int(os.getenv("MAX_CONCURRENT_SESSIONS", "50"))
 
     await init_db(db_path)
+    from . import profile_db
+    reset_count = await profile_db.reset_registering_profiles(db_path)
+    if reset_count > 0:
+        logger.info("Reset %d profiles from 'registering' to 'pending' at startup.", reset_count)
 
     api = QuotaApiClient(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
     from .admin import ADMIN_TELEGRAM_ID
