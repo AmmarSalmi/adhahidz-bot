@@ -17,7 +17,12 @@ from telegram.ext import (
 
 from . import profile_db
 from .admin import check_restricted
-from .registration import _validate_password
+from .registration import (
+    validate_profile_compliance,
+    validate_email_format,
+    _validate_password,
+    ASK_WILAYA
+)
 from .i18n import t, get_lang
 
 logger = logging.getLogger(__name__)
@@ -302,7 +307,7 @@ async def ap_collect_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Handle common skip keywords
     if text.lower() in ("-", "skip", "none", "aucun", "no", "لا"):
         state["email"] = ""
-    elif not _validate_email(text):
+    elif not validate_email_format(text):
         await update.message.reply_text(
             t(lang, "❌ *Invalid email format.*\n\nPlease enter a valid email address or send `-` to skip:"),
             parse_mode="Markdown"
@@ -667,7 +672,7 @@ async def on_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     elif field == "email":
         if text.lower() in ("-", "skip", "none", "aucun", "no", "لا"):
             text = ""
-        elif not _validate_email(text):
+        elif not validate_email_format(text):
             await update.message.reply_text(t(lang, "❌ Invalid email format. Try again or send `-` to skip:"))
             return EDIT_WAITING_VALUE
 
@@ -776,12 +781,7 @@ async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
-def _validate_email(email: str) -> bool:
-    """Return True if email is valid or empty."""
-    if not email:
-        return True
-    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-    return bool(re.match(pattern, email))
+
 
 
 def build_editprofile_handler() -> ConversationHandler:
@@ -895,22 +895,10 @@ async def _revalidate_and_warn(update: Update, context: ContextTypes.DEFAULT_TYP
     if not profile:
         return
 
-    # Validation logic (sync with admin.py and registration.py)
-    is_valid_email = _validate_email(profile.email)
-    other_errors = []
-    if not profile.nin.isdigit() or len(profile.nin) != 18:
-        other_errors.append("NIN")
-    if not profile.cnibe.isdigit() or len(profile.cnibe) != 9:
-        other_errors.append("CNIBE")
-    if not profile.phone.isdigit() or len(profile.phone) != 10 or not profile.phone.startswith("0"):
-        other_errors.append("Phone")
-    
-    pw_errs = _validate_password(profile.password)
-    if pw_errs:
-        other_errors.append("Password")
+    # Unified validation logic
+    err_fields = validate_profile_compliance(profile)
 
-    conforms = (is_valid_email and not other_errors)
-    new_is_valid = 1 if conforms else 0
+    new_is_valid = 1 if not err_fields else 0
     
     # Update DB if status changed
     if profile.is_valid != new_is_valid:
@@ -919,15 +907,13 @@ async def _revalidate_and_warn(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             logger.exception("Failed to update is_valid during re-validation")
 
-    if not conforms:
+    if err_fields:
         msg = (
             "⚠️ *Warning: Profile still invalid*\n\n"
             "This profile is currently **excluded from auto-registration** because it still contains errors:\n"
         )
-        if not is_valid_email and profile.email:
-            msg += "  • Invalid Email format\n"
-        for err in other_errors:
-            msg += f"  • Invalid {err}\n"
+        for err in err_fields:
+            msg += f"  • Invalid **{err}**\n"
         
         msg += "\nPlease fix these errors in /profiles to re-enable auto-registration for this profile."
         

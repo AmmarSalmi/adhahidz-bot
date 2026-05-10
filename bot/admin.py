@@ -725,7 +725,9 @@ async def on_admin_check_profile_received(update: Update, context: ContextTypes.
         "registering": "🔄"
     }.get(profile.status, "ℹ️")
 
-    valid_str = "✅ Yes" if profile.is_valid else "❌ No"
+    from .registration import validate_profile_compliance
+    err_fields = validate_profile_compliance(profile)
+    valid_str = "✅ Yes" if not err_fields else f"❌ No (Errors: {', '.join(err_fields)})"
 
     text = (
         f"🆔 *Profile Information (ID: {profile.id})*\n\n"
@@ -1223,8 +1225,7 @@ async def on_admin_inbox_resolve(update: Update, context: ContextTypes.DEFAULT_T
 
 async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Scan all profiles for invalid data, fix emails, and notify users."""
-    from .profile_handlers import _validate_email
-    from .registration import _validate_password
+    from .registration import validate_profile_compliance, validate_email_format
     query = update.callback_query
     if not query:
         return
@@ -1257,23 +1258,10 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
             
             for p in profiles:
                 checked_count += 1
-                is_valid_email = _validate_email(p.email)
                 
-                # Check other fields too
-                other_errors = []
-                if not p.nin.isdigit() or len(p.nin) != 18:
-                    other_errors.append("NIN")
-                if not p.cnibe.isdigit() or len(p.cnibe) != 9:
-                    other_errors.append("CNIBE")
-                if not p.phone.isdigit() or len(p.phone) != 10 or not p.phone.startswith("0"):
-                    other_errors.append("Phone")
-                
-                pw_errs = _validate_password(p.password)
-                if pw_errs:
-                    other_errors.append("Password")
-                
-                # Determine if profile conforms to norms
-                conforms = (is_valid_email and not other_errors)
+                # Unified validation logic
+                other_errors = validate_profile_compliance(p)
+                conforms = not other_errors
                 new_is_valid = 1 if conforms else 0
                 
                 # Update is_valid in DB if it changed
@@ -1283,19 +1271,21 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                     except Exception:
                         logger.exception("Failed to update is_valid for profile %s", p.id)
 
-                if other_errors:
+                if not conforms:
                     invalid_others += 1
                     for field in other_errors:
                         user_invalid_fields.append((p.name or f"#{p.id}", field))
-
-                if not is_valid_email:
-                    # Fix it!
-                    try:
-                        await profile_db.update_profile_field(db_path, p.id, user_id, "email", "")
-                        fixed_emails += 1
-                        user_fixed_count += 1
-                    except Exception:
-                        logger.exception("Failed to fix email for profile %s", p.id)
+                    
+                    # Special handling: if email is the ONLY error, we can fix it automatically
+                    # but since we want users to fix their data, we'll just flag it for now.
+                    # Previous logic cleared invalid emails:
+                    if "Email" in other_errors and len(other_errors) == 1:
+                         try:
+                             await profile_db.update_profile_field(db_path, p.id, user_id, "email", "")
+                             fixed_emails += 1
+                             user_fixed_count += 1
+                         except Exception:
+                             logger.exception("Failed to fix email for profile %s", p.id)
 
             # Notify user if we fixed something or found errors
             if not is_silent and (user_fixed_count > 0 or user_invalid_fields):

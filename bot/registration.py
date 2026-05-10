@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re
 import time
 from typing import Any
 
@@ -505,6 +506,61 @@ def _validate_password(pw: str) -> list[str]:
         errors.append("The dot (.) character is not allowed in passwords")
     if any(c.isspace() for c in pw):
         errors.append("Must not contain whitespace")
+    return errors
+
+
+def validate_email_format(email: str) -> bool:
+    """Return True if email is valid or empty."""
+    if not email:
+        return True
+    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    return bool(re.match(pattern, email))
+
+
+def validate_profile_compliance(p: Any) -> list[str]:
+    """
+    Unified validation logic for profile data.
+    Accepts either a Profile dataclass or a dictionary of profile state.
+    Returns a list of error field names (e.g. ['NIN', 'Password']).
+    """
+    # Normalize input
+    if hasattr(p, "nin"): # Dataclass (Profile)
+        nin = str(p.nin)
+        cnibe = str(p.cnibe)
+        phone = str(p.phone)
+        password = str(p.password)
+        email = str(p.email or "")
+    else: # Dictionary (registration state or add_profile state)
+        nin = str(p.get("nin") or p.get("NIN") or "")
+        cnibe = str(p.get("cnibe") or p.get("CNIBE") or "")
+        # Handle both 'phone' (profile_db) and 'phoneNumber' (registration state)
+        phone = str(p.get("phone") or p.get("phoneNumber") or "")
+        password = str(p.get("password") or "")
+        email = str(p.get("email") or "")
+
+    errors = []
+    
+    # 1. NIN: 18 digits
+    if not nin.isdigit() or len(nin) != 18:
+        errors.append("NIN")
+        
+    # 2. CNIBE: 9 digits
+    if not cnibe.isdigit() or len(cnibe) != 9:
+        errors.append("CNIBE")
+        
+    # 3. Phone: 10 digits starting with 0
+    if not phone.isdigit() or len(phone) != 10 or not phone.startswith("0"):
+        errors.append("Phone")
+        
+    # 4. Password: complex validation (8-16 chars, upper, lower, digit, symbol, no dots)
+    pw_errs = _validate_password(password)
+    if pw_errs:
+        errors.append("Password")
+        
+    # 5. Email: valid format if present
+    if email and not validate_email_format(email):
+        errors.append("Email")
+             
     return errors
 
 

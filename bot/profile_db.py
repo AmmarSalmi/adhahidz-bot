@@ -207,6 +207,7 @@ async def update_profile_field(
     allowed_fields = {
         "name", "nin", "cnibe", "phone", "password", "wilaya_id", "wilaya_name",
         "commune_code", "commune_name", "email", "payment_method", "status",
+        "is_valid", "priority"
     }
     if field not in allowed_fields:
         raise ValueError(f"Cannot update field: {field}")
