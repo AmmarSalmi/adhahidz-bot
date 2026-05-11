@@ -165,7 +165,7 @@ async def _try_submit_profile(
         )
 
         if 200 <= resp.status_code < 300 or resp.status_code == 425:
-            return profile, "submitted", resp.text
+            return profile, "pre-registered", resp.text
 
         if resp.status_code in _IP_BLOCK_CODES:
             return profile, "ip_blocked", _extract_error_message(resp)
@@ -682,15 +682,15 @@ async def _process_user_profiles(
 
             profile, outcome, detail = result
 
-            if outcome == "submitted":
-                await profile_db.set_profile_status(db_path, profile.id, "submitted")
+            if outcome == "pre-registered":
+                await profile_db.set_profile_status(db_path, profile.id, "pre-registered")
                 masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
                 lang = await get_user_language(db_path, user_id)
                 await safe_send_message(
                     app.bot,
                     user_id=user_id,
                     db_path=db_path,
-                    text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nNIN: `{nin}`\n\nYour spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
+                    text=t(lang, "✅ *Registration submitted!* \n\nProfile: *{name}*\nNIN: `{nin}`\n\n🚨 *URGENT:* Your spot is reserved, but you **MUST** verify the OTP **within 30 minutes**, or your order will be cancelled!\n\nUse the official website or /verifyotp to complete verification:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
                     parse_mode="Markdown",
                 )
             elif outcome == "already_registered":
@@ -785,15 +785,15 @@ async def _process_user_profiles(
                     p_result = await _try_submit_profile(profile, client, base_headers)
                     _, outcome, detail = p_result
 
-                    if outcome == "submitted":
-                        await profile_db.set_profile_status(db_path, profile.id, "submitted")
+                    if outcome == "pre-registered":
+                        await profile_db.set_profile_status(db_path, profile.id, "pre-registered")
                         masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
                         lang = await get_user_language(db_path, user_id)
                         await safe_send_message(
                             app.bot,
                             user_id=user_id,
                             db_path=db_path,
-                            text=t(lang, "✅ *Registration submitted!*\n\nProfile: *{name}*\nNIN: `{nin}`\n\nYour spot is secured! Use the official website to complete OTP verification when ready:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
+                            text=t(lang, "✅ *Registration submitted!* \n\nProfile: *{name}*\nNIN: `{nin}`\n\n🚨 *URGENT:* Your spot is reserved, but you **MUST** verify the OTP **within 30 minutes**, or your order will be cancelled!\n\nUse the official website or /verifyotp to complete verification:\n🔗 https://adhahi.dz/activation").format(name=profile.name or masked, nin=profile.nin),
                             parse_mode="Markdown",
                         )
                     elif outcome == "already_registered":
@@ -1017,10 +1017,11 @@ async def manual_captcha_reply_handler(update: Update, context: ContextTypes.DEF
     logger.info("Manual submit response: status=%s body=%s", resp.status_code, resp.text)
 
     if 200 <= resp.status_code < 300 or resp.status_code == 425:
-        await profile_db.set_profile_status(db_path, profile.id, "submitted")
+        await profile_db.set_profile_status(db_path, profile.id, "pre-registered")
         await update.message.reply_text(
-            f"✅ *Registration submitted for {profile.name}!*\n\n"
-            "Your spot is secured! Use the official website to verify when ready:\n🔗 https://adhahi.dz/activation",
+            f"✅ *Registration submitted for {profile.name}!* \n\n"
+            "🚨 *URGENT:* Your spot is reserved, but you **MUST** verify the OTP **within 30 minutes**, or your order will be cancelled!\n\n"
+            "Use the official website or /verifyotp to complete verification:\n🔗 https://adhahi.dz/activation",
             parse_mode="Markdown",
         )
     else:
@@ -1175,16 +1176,42 @@ async def _complete_post_otp_flow(
 # ─── /verifyotp command ───────────────────────────────────────────────────────
 
 async def verifyotp_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inform user that OTP verification via bot is disabled."""
+    """Start the OTP verification flow for pre-registered profiles."""
     db_path: str = context.application.bot_data["db_path"]
-    lang = await get_user_language(db_path, update.effective_user.id)
-    
-    await update.effective_message.reply_text(
-        t(lang, "⚠️ *OTP verification via bot is currently disabled.* \n\nPlease use the official website to verify your OTP and complete your registration:\n\n🔗 https://adhahi.dz/activation"),
-        parse_mode="Markdown",
-        disable_web_page_preview=False
-    )
-    return ConversationHandler.END
+    user_id = update.effective_user.id
+    lang = await get_user_language(db_path, user_id)
+
+    # Fetch profiles that need verification
+    profiles = await profile_db.get_profiles_by_status(db_path, user_id, "pre-registered")
+    if not profiles:
+        await update.effective_message.reply_text(
+            t(lang, "You have no profiles waiting for OTP verification (status must be 'pre-registered').")
+        )
+        return ConversationHandler.END
+
+    state = {"profiles": profiles, "attempts": 0}
+    context.user_data["verify_otp"] = state
+
+    if len(profiles) == 1:
+        profile = profiles[0]
+        state["profile"] = profile
+        masked = f"{profile.nin[:4]}…{profile.nin[-4:]}"
+        await update.effective_message.reply_text(
+            t(lang, "✅ Verification for: *{name}* (`{phone}`)\n\nPlease enter the **6-digit OTP** sent to your phone:").format(
+                name=profile.name or masked, phone=profile.phone
+            ),
+            parse_mode="Markdown"
+        )
+    else:
+        # Ask to select a profile
+        lines = [t(lang, "Select a profile to verify:")]
+        for p in profiles:
+            masked = f"{p.nin[:4]}…{p.nin[-4:]}"
+            lines.append(f"  `{p.id}` — *{p.name or masked}* (`{p.phone}`)")
+        lines.append(t(lang, "\nType the **ID number** of the profile:"))
+        await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    return VERIFY_OTP_CAPTCHA
 
 
 async def verifyotp_handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1254,7 +1281,20 @@ async def verifyotp_handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data.pop("verify_otp", None)
         return ConversationHandler.END
 
+    # RESTRICTION: Check attempt limit
+    attempts = state.get("attempts", 0)
+    if attempts >= 3:
+        await update.message.reply_text("❌ Too many failed attempts for this session. Please wait a while and try again with /verifyotp.")
+        context.user_data.pop("verify_otp", None)
+        return ConversationHandler.END
+    state["attempts"] = attempts + 1
+
+    # RESTRICTION: Strict 6-digit format
     otp = text
+    if not otp.isdigit() or len(otp) != 6:
+        await update.message.reply_text("❌ Invalid OTP. It must be exactly **6 digits** (numbers only). Try again:")
+        return VERIFY_OTP_CAPTCHA
+
     await update.message.reply_text("⏳ Solving CAPTCHA and verifying OTP…")
 
     client = _get_http_client(context)

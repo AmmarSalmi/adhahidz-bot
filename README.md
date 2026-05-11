@@ -7,10 +7,10 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Interactive UI**: Navigate easily using persistent bottom menus and hierarchical inline keyboards instead of memorizing commands.
 - **Multi-language Support (i18n)**: Fully localized interface in Arabic 🇩🇿, French 🇫🇷, and English 🇬🇧.
 - **Notifications**: Alerts subscribed users when quota becomes available in their chosen Wilaya.
-- **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open. Now features **Admin Profile Prioritization** (admin profiles are always moved to the top of the batch), **Seniority-Based Priority**, **Global Concurrency Throttling**, and **Aggressive Mode** (continuous scanning of open Wilayas to ensure no profile is missed, even if added after the Wilaya opened).
+- **Concurrent Auto-Registration**: Automatically registers multiple users simultaneously, handles OTPs, and creates orders the moment quotas open. Now features **30-Minute Urgency Warnings** (users are immediately notified that they have a strict window to verify OTP before the order is cancelled), **Admin Profile Prioritization**, **Seniority-Based Priority**, **Global Concurrency Throttling**, and **Aggressive Mode**.
 - **Intelligent Nudging**: When Wilayas are open, the bot aggressively nudges users with `pre-registered` profiles to verify their OTP, featuring a built-in **1-hour cooldown** to balance urgency with user experience.
 - **CAPTCHA Solving**: Optimized hybrid strategy featuring rapid local OCR (`ddddocr`) with **5 retry attempts** and humanizing jitter (0.5s-1.0s) to minimize solve latency during tight windows, falling back to third-party API (`2captcha`) only as a final resort.
-- **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification. Now features **Premium Order Secured Notifications** that include direct login links and credential reminders.
+- **Order Management**: Tracks the lifecycle of profiles (`pending`, `pre-registered`, `registered`, `ordered`), verifies pending orders, and sends 12-hour reminders for OTP verification. Features a **Unified Pre-registered Status** to ensure consistent tracking of profiles pending activation. Now features **Premium Order Secured Notifications** that include direct login links and credential reminders.
 - **Admin Order Sync & Reconciliation**: An administrative tool that performs a deep scan of `registered` profiles against the official server's `/my-orders` endpoint. It automatically reconciles discrepancies, marks secured orders as `ordered` in the local database, and notifies users with localized congratulatory messages.
 - **Persistent Order Analytics**: A dedicated tracking system for secured orders and blocked-user detections. It maintains a historical record of all identified orders, providing accurate performance metrics in the admin statistics panel even if user data is purged.
 - **Enhanced Connection Resilience**: All core API interactions now feature **increased timeouts (30s)** and robust connection management. Features **Advanced Proxy SSL Support** with a custom, lenient SSL context that resolves 'SSL record layer failures' commonly seen with residential proxies by supporting TLS 1.2+ and a broader cipher set. Administrative tasks like Order Sync now respect granular proxy settings to bypass server-side rate limits and IP blocks.
@@ -103,7 +103,7 @@ Most interaction is now handled via the built-in menus, but commands are still a
 - `/editprofile`: Edit a registration profile
 - `/deleteprofile`: Delete a registration profile
 - `/reorder`: Change profile priority order
-- `/verifyotp`: Verify OTP for a submitted profile
+- `/verifyotp`: Verify OTP for a pre-registered profile (includes 6-digit validation and 3-attempt safety limit)
 - `/register`: Manual adhahi.dz registration flow
 - `/testcaptchasolvers`: Test both CAPTCHA solvers side-by-side
 
