@@ -24,6 +24,7 @@ from .registration import (
     ASK_WILAYA
 )
 from .i18n import t, get_lang
+from .notifier import safe_query_answer
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ async def ap_on_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     lang = await get_lang(context, update.effective_user.id)
     if not query:
         return AP_WILAYA
-    await query.answer()
+    await safe_query_answer(query)
 
     code = (query.data or "").split(":", 1)[1]
     state = _ap_state(context)
@@ -250,7 +251,7 @@ async def ap_on_commune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     lang = await get_lang(context, update.effective_user.id)
     if not query:
         return AP_COMMUNE
-    await query.answer()
+    await safe_query_answer(query)
 
     commune_code = (query.data or "").split(":", 1)[1]
     state = _ap_state(context)
@@ -281,7 +282,7 @@ async def ap_on_payment_method(update: Update, context: ContextTypes.DEFAULT_TYP
     lang = await get_lang(context, update.effective_user.id)
     if not query:
         return AP_PAYMENT_METHOD
-    await query.answer()
+    await safe_query_answer(query)
 
     method = (query.data or "").split(":", 1)[1]
     if method not in _PAYMENT_METHODS:
@@ -359,7 +360,7 @@ async def ap_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def build_addprofile_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
-            CommandHandler("addprofile", addprofile_start),
+            CommandHandler("addprofile", addprofile_start, filters=filters.ChatType.PRIVATE),
             CallbackQueryHandler(addprofile_start, pattern=r"^menu:cmd:addprofile$"),
         ],
         states={
@@ -443,7 +444,7 @@ async def on_view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     profile_id = int((query.data or "").split(":", 1)[1])
     db_path: str = context.application.bot_data["db_path"]
@@ -507,7 +508,7 @@ async def on_delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     profile_id = int((query.data or "").split(":", 1)[1])
     db_path: str = context.application.bot_data["db_path"]
@@ -554,7 +555,7 @@ async def on_edit_profile_select(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     profile_id = int((query.data or "").split(":", 1)[1])
     context.user_data["editing_profile_id"] = profile_id
@@ -587,7 +588,7 @@ async def on_edit_field_select(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     parts = (query.data or "").split(":", 2)
     profile_id = int(parts[1])
@@ -701,7 +702,7 @@ async def on_edit_payment_method(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if not query:
         return EDIT_WAITING_VALUE
-    await query.answer()
+    await safe_query_answer(query)
 
     parts = (query.data or "").split(":", 2)
     profile_id = int(parts[1])
@@ -739,7 +740,7 @@ async def on_edit_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     if not query:
         return EDIT_WAITING_VALUE
-    await query.answer()
+    await safe_query_answer(query)
 
     parts = (query.data or "").split(":", 2)
     profile_id = int(parts[1])
@@ -870,7 +871,7 @@ async def reorder_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def build_reorder_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
-            CommandHandler("reorder", reorder_start),
+            CommandHandler("reorder", reorder_start, filters=filters.ChatType.PRIVATE),
             CallbackQueryHandler(reorder_start, pattern=r"^menu:cmd:reorder$"),
         ],
         states={

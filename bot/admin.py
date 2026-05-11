@@ -36,7 +36,7 @@ from telegram.error import Forbidden
 
 from . import profile_db, db as db_mod
 from .proxy import get_proxy_url
-from .notifier import safe_send_message, safe_send_photo
+from .notifier import safe_send_message, safe_send_photo, safe_query_answer
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,7 @@ async def on_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -239,7 +239,7 @@ async def on_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -355,7 +355,7 @@ async def on_admin_users_submenu(
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -376,7 +376,7 @@ async def on_admin_profiles_submenu(
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -397,7 +397,7 @@ async def on_admin_infra_submenu(
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -418,7 +418,7 @@ async def on_admin_inbox_submenu(
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -439,7 +439,7 @@ async def on_admin_toggle_restrict(
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -477,7 +477,7 @@ async def on_admin_toggle_proxy(
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -530,7 +530,7 @@ async def on_admin_set_concurrency(
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -624,7 +624,7 @@ async def on_admin_proxy_cancel(update: Update, context: ContextTypes.DEFAULT_TY
     """Cancel the interval update and return to proxy menu."""
     query = update.callback_query
     if query:
-        await query.answer()
+        await safe_query_answer(query)
         keyboard = _infra_submenu_keyboard(context)
         await query.edit_message_text(
             "🌐 *Infrastructure & Performance*\n\n"
@@ -642,7 +642,7 @@ async def on_admin_test_proxy(
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -806,7 +806,7 @@ async def on_admin_check_profile_start(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -886,7 +886,7 @@ async def on_admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -947,7 +947,7 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -1174,7 +1174,7 @@ async def on_admin_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -1260,7 +1260,7 @@ async def on_admin_inbox_filter_level(update: Update, context: ContextTypes.DEFA
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
     
     offset = query.data.split(":")[2]
     
@@ -1278,7 +1278,7 @@ async def on_admin_inbox_filter_status(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
     
     offset = query.data.split(":")[2]
     
@@ -1296,7 +1296,7 @@ async def on_admin_inbox_filter_date(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
     
     offset = query.data.split(":")[2]
     
@@ -1314,7 +1314,7 @@ async def on_admin_inbox_view(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     entry_id = int(query.data.split(":")[2])
     db_path = context.application.bot_data.get("db_path", "")
@@ -1377,7 +1377,7 @@ async def on_admin_inbox_clear(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     db_path = context.application.bot_data.get("db_path", "")
     count = await db_mod.hide_all_inbox_entries(db_path)
@@ -1392,7 +1392,7 @@ async def on_admin_inbox_mute_confirm(update: Update, context: ContextTypes.DEFA
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     db_path = context.application.bot_data.get("db_path", "")
     await db_mod.set_global_setting(db_path, "inbox_realtime_enabled", "false")
@@ -1412,7 +1412,7 @@ async def on_admin_inbox_settings(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     realtime = context.application.bot_data.get("inbox_realtime_enabled", True)
     interval = context.application.bot_data.get("inbox_report_interval_mins", 60)
@@ -1466,7 +1466,7 @@ async def on_admin_inbox_change_interval(update: Update, context: ContextTypes.D
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    await query.answer()
+    await safe_query_answer(query)
 
     await query.edit_message_text(
         "⏱️ *Set Summary Report Interval*\n\n"
@@ -1513,7 +1513,7 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -1530,6 +1530,7 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
     fixed_emails = 0
     invalid_others = 0
     notifications_sent = 0
+    all_invalid_profiles: list[tuple[int, str, int, list[str]]] = []  # (profile_id, name, user_id, errors)
 
     try:
         user_profiles = await profile_db.get_all_profiles_grouped_by_user(db_path)
@@ -1559,6 +1560,7 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                     invalid_others += 1
                     for field in other_errors:
                         user_invalid_fields.append((p.name or f"#{p.id}", field))
+                    all_invalid_profiles.append((p.id, p.name or f"#{p.id}", user_id, list(other_errors)))
                     
                     # Special handling: if email is the ONLY error, we can fix it automatically
                     # but since we want users to fix their data, we'll just flag it for now.
@@ -1607,13 +1609,21 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
                     logger.warning("Could not notify user %s: %s", user_id, e)
 
         mode_txt = " (SILENT)" if is_silent else ""
-        summary_text = (
-            f"✅ *Database Check Complete{mode_txt}*\n\n"
-            f"Profiles checked: `{checked_count}`\n"
-            f"Invalid emails fixed: `{fixed_emails}`\n"
-            f"Other invalid fields detected: `{invalid_others}` (NIN/CNIBE/PW)\n"
-            f"User notifications sent: `{notifications_sent}`"
-        )
+        summary_parts = [
+            f"✅ *Database Check Complete{mode_txt}*\n",
+            f"Profiles checked: `{checked_count}`",
+            f"Invalid emails fixed: `{fixed_emails}`",
+            f"Other invalid fields detected: `{invalid_others}` (NIN/CNIBE/PW)",
+            f"User notifications sent: `{notifications_sent}`",
+        ]
+
+        if all_invalid_profiles:
+            summary_parts.append("\n🔍 *Invalid Profile Details:*")
+            for pid, pname, uid, errors in all_invalid_profiles:
+                fields_str = ", ".join(errors)
+                summary_parts.append(f"  • ID `{pid}` — *{pname}* (user `{uid}`) → `{fields_str}`")
+
+        summary_text = "\n".join(summary_parts)
         
         logger.info("Force check complete: %d checked, %d fixed, %d invalid, %d notified", 
                     checked_count, fixed_emails, invalid_others, notifications_sent)
@@ -1643,7 +1653,7 @@ async def on_admin_purge_blockers(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -1741,7 +1751,7 @@ async def on_admin_notify_invalid_nins(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")
@@ -1858,7 +1868,7 @@ async def on_admin_sync_orders(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await safe_query_answer(query)
 
     if not is_admin(update):
         await query.edit_message_text("⛔ Access denied.")

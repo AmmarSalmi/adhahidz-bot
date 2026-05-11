@@ -1414,7 +1414,7 @@ def build_verifyotp_handler() -> ConversationHandler:
     """ConversationHandler for /verifyotp flow."""
     return ConversationHandler(
         entry_points=[
-            CommandHandler("verifyotp", verifyotp_start),
+            CommandHandler("verifyotp", verifyotp_start, filters=filters.ChatType.PRIVATE),
             CallbackQueryHandler(verifyotp_start, pattern=r"^menu:cmd:verifyotp$"),
         ],
         states={

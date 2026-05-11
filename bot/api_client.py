@@ -163,7 +163,7 @@ class QuotaApiClient:
         # Some public endpoints behave differently without a browser-like UA/Referer.
         headers: dict[str, str] = {
             "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/149.0",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
             "Referer": "https://adhahi.dz/register",
         }
         if self._api_key:
@@ -242,11 +242,31 @@ class QuotaApiClient:
         mode = "via proxy" if proxy_url else "directly"
         logger.info("Fetching quotas from adhahi.dz %s...", mode)
         
+        # Use a shorter timeout for the public quota poll to avoid blocking the scheduler
+        quota_timeout = 15.0
+        
+        statuses = {}
         if proxy_url:
-            async with self.create_session(proxy_url=proxy_url) as client:
-                return await self._fetch_with_client(client, path)
-        else:
-            return await self._fetch_with_client(self._client, path)
+            try:
+                async with self.create_session(proxy_url=proxy_url, timeout_s=quota_timeout) as client:
+                    statuses = await self._fetch_with_client(client, path)
+            except Exception as e:
+                logger.warning("Proxy fetch failed (%s), attempting direct fallback...", type(e).__name__)
+        
+        if not statuses:
+            # Fallback to direct fetch if proxy failed or was not requested
+            if proxy_url:
+                logger.info("Attempting direct fallback fetch...")
+            
+            # Create a temporary direct client with shorter timeout for this poll
+            async with httpx.AsyncClient(
+                base_url=self._base_url,
+                headers=self._client.headers,
+                timeout=httpx.Timeout(quota_timeout)
+            ) as direct_client:
+                statuses = await self._fetch_with_client(direct_client, path)
+
+        return statuses
 
     async def _fetch_with_client(self, client: httpx.AsyncClient, path: str) -> dict[str, QuotaStatus]:
         delay_s = 0.5

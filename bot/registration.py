@@ -214,7 +214,7 @@ async def on_wilaya_selected(
     query = update.callback_query
     if not query:
         return ASK_WILAYA
-    await query.answer()
+    await safe_query_answer(query)
 
     data = query.data or ""
     if not data.startswith("reg_wilaya:"):
@@ -323,7 +323,7 @@ async def on_commune_selected(
     query = update.callback_query
     if not query:
         return ASK_COMMUNE
-    await query.answer()
+    await safe_query_answer(query)
 
     data = query.data or ""
     if not data.startswith("reg_commune:"):
@@ -464,7 +464,7 @@ async def on_payment_method_selected(
     query = update.callback_query
     if not query:
         return ASK_PAYMENT_METHOD
-    await query.answer()
+    await safe_query_answer(query)
 
     data = query.data or ""
     if not data.startswith("reg_pm:"):
@@ -762,7 +762,7 @@ def build_registration_handler() -> ConversationHandler:
     """Create and return the ConversationHandler for the registration flow."""
     return ConversationHandler(
         entry_points=[
-            CommandHandler("register", register_start),
+            CommandHandler("register", register_start, filters=filters.ChatType.PRIVATE),
             CallbackQueryHandler(register_start, pattern=r"^menu:cmd:register$"),
         ],
         states={
@@ -796,6 +796,7 @@ def build_registration_handler() -> ConversationHandler:
 
 
 from . import profile_db
+from .notifier import safe_query_answer
 
 async def check_profile_status(
     api_client: Any,

@@ -29,7 +29,7 @@ from .admin import (
 from .api_client import QuotaApiClient
 from .auto_registration import build_verifyotp_handler, manual_captcha_reply_handler
 from .db import init_db
-from .handlers import BOT_COMMANDS, change, checkprofile, fetchinfo, help_command, on_check_profile, on_my_chat_member_update, on_wilaya_selected, start, status, stop, test_captcha_solvers
+from .handlers import BOT_COMMANDS, change, checkprofile, fetchinfo, help_command, on_check_profile, on_my_chat_member_update, on_wilaya_selected, start, status, stop, test_captcha_solvers, wilaya_lookup_handler
 from .profile_handlers import (
     build_addprofile_handler,
     build_editprofile_handler,
@@ -274,26 +274,28 @@ def main() -> None:
     app.add_handler(build_reorder_handler())
 
     # Message handlers
-    app.add_handler(MessageHandler(filters.REPLY & filters.TEXT, manual_captcha_reply_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_menu))
+    app.add_handler(MessageHandler(filters.REPLY & filters.TEXT & filters.ChatType.PRIVATE, manual_captcha_reply_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wilaya_lookup_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_reply_menu))
 
     # Simple command handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", menu_command))
-    app.add_handler(CommandHandler("change", change))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("stop", stop))
-    app.add_handler(CommandHandler("fetchinfo", fetchinfo))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("testcaptchasolvers", test_captcha_solvers))
-    app.add_handler(CommandHandler("checkprofile", checkprofile))
-    app.add_handler(CommandHandler("profiles", list_profiles))
-    app.add_handler(CommandHandler("viewprofile", viewprofile))
-    app.add_handler(CommandHandler("deleteprofile", deleteprofile))
-    app.add_handler(CommandHandler("editprofile", editprofile))
+    only_private = filters.ChatType.PRIVATE
+    app.add_handler(CommandHandler("start", start, filters=only_private))
+    app.add_handler(CommandHandler("menu", menu_command, filters=only_private))
+    app.add_handler(CommandHandler("change", change, filters=only_private))
+    app.add_handler(CommandHandler("status", status, filters=only_private))
+    app.add_handler(CommandHandler("stop", stop, filters=only_private))
+    app.add_handler(CommandHandler("fetchinfo", fetchinfo, filters=only_private))
+    app.add_handler(CommandHandler("help", help_command, filters=only_private))
+    app.add_handler(CommandHandler("testcaptchasolvers", test_captcha_solvers, filters=only_private))
+    app.add_handler(CommandHandler("checkprofile", checkprofile, filters=only_private))
+    app.add_handler(CommandHandler("profiles", list_profiles, filters=only_private))
+    app.add_handler(CommandHandler("viewprofile", viewprofile, filters=only_private))
+    app.add_handler(CommandHandler("deleteprofile", deleteprofile, filters=only_private))
+    app.add_handler(CommandHandler("editprofile", editprofile, filters=only_private))
 
     # --- Admin-only handlers (hidden, not in setMyCommands) ---
-    app.add_handler(CommandHandler("adminammar", admin_command))
+    app.add_handler(CommandHandler("adminammar", admin_command, filters=only_private))
     app.add_handler(CallbackQueryHandler(on_admin_force_check, pattern=r"^admin:force_check(:silent)?$"))
     app.add_handler(CallbackQueryHandler(on_admin_stats, pattern=r"^admin:stats$"))
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^admin:back$"))
@@ -325,7 +327,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_menu_cmd, pattern=r"^menu:cmd:"))
     app.add_handler(ChatMemberHandler(on_my_chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
 
-    app.run_polling(allowed_updates=["message", "callback_query", "my_chat_member"])
+    app.run_polling(allowed_updates=["message", "callback_query", "my_chat_member", "channel_post"])
 
 
 if __name__ == "__main__":

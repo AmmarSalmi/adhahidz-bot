@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from telegram import ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update, constants
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from . import db as db_mod
@@ -14,6 +15,9 @@ from .api_client import QuotaStatus
 from .captcha_solver import LocalOcrSolver, TwoCaptchaSolver
 from .registration import _build_headers, _get_http_client
 from .i18n import t, get_lang
+from .notifier import safe_query_answer
+import unicodedata
+import re
 
 # Canonical list of bot commands — used by the /help handler and set_my_commands.
 BOT_COMMANDS = [
@@ -90,6 +94,8 @@ async def _ensure_wilayas_loaded(context: ContextTypes.DEFAULT_TYPE) -> list[tup
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat.type != constants.ChatType.PRIVATE:
+        return
     lang = await get_lang(context, update.effective_user.id)
     from .menu import get_reply_main_menu_keyboard
     
@@ -358,7 +364,11 @@ async def on_check_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    try:
+        await safe_query_answer(query)
+    except BadRequest:
+        logger.debug("Stale callback query in on_check_profile — ignoring.")
+        return
 
     data = query.data or ""
     if not data.startswith("chk_prof:"):
@@ -443,6 +453,8 @@ async def on_check_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat.type != constants.ChatType.PRIVATE:
+        return
     lang = await get_lang(context, update.effective_user.id)
     lines = [t(lang, "📖 *Available Commands*\n")]
     for cmd, desc in BOT_COMMANDS:
@@ -455,7 +467,11 @@ async def on_wilaya_selected(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    try:
+        await safe_query_answer(query)
+    except BadRequest:
+        logger.debug("Stale callback query in on_wilaya_selected — ignoring.")
+        return
 
     data = query.data or ""
     if not data.startswith("wilaya:"):
@@ -474,21 +490,175 @@ async def on_wilaya_selected(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def on_my_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Detect when a user blocks or unblocks the bot."""
+    """Detect when a user blocks or unblocks the bot, or when invited to chats."""
     if not update.my_chat_member:
         return
 
     new_status = update.my_chat_member.new_chat_member.status
-    user_id = update.effective_user.id
+    chat = update.my_chat_member.chat
+    from_user = update.my_chat_member.from_user
 
-    # In private chats, 'kicked' status means the user blocked the bot.
-    if new_status == constants.ChatMemberStatus.BANNED:
-        logger.warning("User %s blocked the bot. Deleting all data.", user_id)
-        db_path = context.application.bot_data.get("db_path")
-        if db_path:
-            try:
-                await db_mod.delete_user_data(db_path, user_id)
-            except Exception:
-                logger.exception("Failed to delete data for blocked user %s", user_id)
-    elif new_status == constants.ChatMemberStatus.MEMBER:
-        logger.info("User %s (re)started the bot.", user_id)
+    # --- Leave unauthorized groups/channels ---
+    if chat.type in (constants.ChatType.GROUP, constants.ChatType.SUPERGROUP, constants.ChatType.CHANNEL):
+        if new_status in (constants.ChatMemberStatus.MEMBER, constants.ChatMemberStatus.ADMINISTRATOR):
+            if not from_user or from_user.id != ADMIN_TELEGRAM_ID:
+                inviter_name = from_user.full_name if from_user else "Unknown"
+                inviter_id = from_user.id if from_user else "Unknown"
+                logger.warning(
+                    "Bot added to %s '%s' (ID: %s) by unauthorized user %s (ID: %s). Leaving...",
+                    chat.type, chat.title, chat.id, inviter_name, inviter_id
+                )
+                try:
+                    await context.bot.leave_chat(chat.id)
+                except Exception:
+                    logger.exception("Failed to leave chat %s", chat.id)
+                return
+
+    # --- Private chat (block/unblock) ---
+    if chat.type == constants.ChatType.PRIVATE:
+        user_id = update.effective_user.id
+        # In private chats, 'kicked' status means the user blocked the bot.
+        if new_status == constants.ChatMemberStatus.BANNED:
+            logger.warning("User %s blocked the bot. Deleting all data.", user_id)
+            db_path = context.application.bot_data.get("db_path")
+            if db_path:
+                try:
+                    await db_mod.delete_user_data(db_path, user_id)
+                except Exception:
+                    logger.exception("Failed to delete data for blocked user %s", user_id)
+        elif new_status == constants.ChatMemberStatus.MEMBER:
+            logger.info("User %s (re)started the bot.", user_id)
+
+
+
+def _normalize_wilaya_name(text: str) -> str:
+    """Normalize wilaya names for robust lookup (lowercase, no accents, no prefixes)."""
+    if not text:
+        return ""
+    # Lowercase and strip
+    text = text.lower().strip()
+    # Remove accents (e.g., Tébessa -> Tebessa)
+    text = "".join(
+        c for c in unicodedata.normalize("NFD", text)
+        if unicodedata.category(c) != "Mn"
+    )
+    # Remove common prefixes
+    for prefix in ["wilaya de ", "wilaya ", "ولاية ", "الولاية ", "ال"]:
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    # Remove all non-alphanumeric characters
+    text = re.sub(r"[^a-z0-9\u0621-\u064A]", "", text)
+    return text
+
+
+_WILAYA_NAME_TO_CODE = {
+    "adrar": "01", "ادرار": "01",
+    "chlef": "02", "شلف": "02",
+    "laghouat": "03", "اغواط": "03",
+    "oumelbouaghi": "04", "امالبواقي": "04", "oeb": "04",
+    "batna": "05", "باتنة": "05", "باتنه": "05",
+    "bejaia": "06", "بجاية": "06", "بجايه": "06",
+    "biskra": "07", "بسكرة": "07", "بسكره": "07",
+    "bechar": "08", "بشار": "08",
+    "blida": "09", "بليدة": "09", "بليده": "09",
+    "bouira": "10", "بويرة": "10", "بويره": "10",
+    "tamanrasset": "11", "تمنراست": "11", "tam": "11", "tamanghasset": "11",
+    "tebessa": "12", "تبسة": "12", "تبسه": "12",
+    "tlemcen": "13", "تلمسان": "13",
+    "tiaret": "14", "تيارت": "14",
+    "tiziouzou": "15", "تيزيوزو": "15", "to": "15", "tizi": "15",
+    "alger": "16", "جزائر": "16", "algiers": "16", "eldjazair": "16",
+    "djelfa": "17", "جلفة": "17",
+    "jijel": "18", "جيجل": "18",
+    "setif": "19", "سطيف": "19",
+    "saida": "20", "سعيدة": "20", "سعيده": "20",
+    "skikda": "21", "سكيكدة": "21", "سكيكده": "21",
+    "sidibelabbes": "22", "سيديبيلعباس": "22", "sba": "22", "belabbes": "22",
+    "annaba": "23", "عنابة": "23", "عنابه": "23",
+    "guelma": "24", "قالمة": "24", "قالمه": "24",
+    "constantine": "25", "قسنطينة": "25", "قسنطينه": "25",
+    "medea": "26", "مدية": "26", "مديه": "26",
+    "mostaganem": "27", "مستغانم": "27", "mosta": "27",
+    "msila": "28", "مسيلة": "28", "مسيله": "28",
+    "mascara": "29", "معسكر": "29",
+    "ouargla": "30", "ورقلة": "30", "ورقله": "30",
+    "oran": "31", "وهران": "31", "wahran": "31",
+    "elbayadh": "32", "بيض": "32",
+    "illizi": "33", "اليزي": "33", "ايليزي": "33",
+    "bordjbouarreridj": "34", "برجبوعريريج": "34", "bba": "34",
+    "boumerdes": "35", "بومرداس": "35",
+    "eltarf": "36", "طارف": "36",
+    "tindouf": "37", "تندوف": "37",
+    "tissemsilt": "38", "تسمسيلت": "38",
+    "eloued": "39", "وادي": "39", "souf": "39",
+    "khenchela": "40", "خنشلة": "40", "خنشله": "40",
+    "soukahras": "41", "سوقاهراس": "41",
+    "tipaza": "42", "تيبازة": "42", "تيبازه": "42",
+    "mila": "43", "ميلة": "43", "ميله": "43",
+    "aindefla": "44", "عينالدفلى": "44", "دفلى": "44",
+    "naama": "45", "نعامة": "45", "نعامه": "45",
+    "aintemouchent": "46", "عينتموشنت": "46", "تموشنت": "46",
+    "ghardaia": "47", "غرداية": "47", "غردايه": "47",
+    "relizane": "48", "غليزان": "48",
+    "elmghair": "49", "مغير": "49", "mghair": "49", "elmeghaier": "49",
+    "elmenia": "50", "منيعة": "50", "منيعه": "50", "elmeniaa": "50",
+    "ouleddjellal": "51", "اولادجلال": "51",
+    "bordjbajimokhtar": "52", "برجباجيمختار": "52", "bbm": "52",
+    "beniabbes": "53", "بنيعباس": "53",
+    "timimoun": "54", "تيميمون": "54",
+    "touggourt": "55", "تقرت": "55",
+    "djanet": "56", "جانت": "56",
+    "insalah": "57", "عينصالح": "57", "انصالح": "57",
+    "inguezzam": "58", "عينقزام": "58", "انقزام": "58"
+}
+
+
+async def wilaya_lookup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle messages containing only a wilaya code (1-58)."""
+    message = update.effective_message
+    if not message or not message.text:
+        return
+
+    text = message.text.strip()
+    wilaya_code = None
+
+    if text.isdigit():
+        code_num = int(text)
+        if 1 <= code_num <= 58:
+            wilaya_code = str(code_num).zfill(2)
+    else:
+        # Try name lookup
+        normalized = _normalize_wilaya_name(text)
+        wilaya_code = _WILAYA_NAME_TO_CODE.get(normalized)
+
+    if not wilaya_code:
+        return
+
+    db_path = context.application.bot_data["db_path"]
+
+    last_open = await db_mod.get_last_open_time(db_path, wilaya_code)
+    wilaya_name = _lookup_wilaya_name(context, wilaya_code)
+
+    if last_open:
+        try:
+            # SQLite datetime('now') returns 'YYYY-MM-DD HH:MM:SS'
+            # But sometimes it might have 'T' or other formats depending on how it was inserted.
+            # We'll try to parse it cleanly.
+            ts_str = last_open.replace("T", " ")
+            dt = datetime.fromisoformat(ts_str)
+            formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            formatted_date = last_open
+
+        response = (
+            f"📍 *{wilaya_name}* ({wilaya_code})\n\n"
+            f"📅 آخر مرة فُتحت فيها كانت بتاريخ:\n"
+            f"`{formatted_date}`"
+        )
+    else:
+        response = (
+            f"📍 *{wilaya_name}* ({wilaya_code})\n\n"
+            f"❌ لا يوجد سجل لفتح هذه الولاية في قاعدة البيانات حالياً."
+        )
+
+    await message.reply_text(response, parse_mode="Markdown")

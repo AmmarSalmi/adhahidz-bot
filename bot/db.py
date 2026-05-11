@@ -338,6 +338,18 @@ async def add_quota_history_entry(db_path: str, wilaya_code: str, event_type: st
             await db.commit()
 
     await _with_retries(_op)
+
+
+async def get_last_open_time(db_path: str, wilaya_code: str) -> str | None:
+    """Return the timestamp of the last OPEN event for a wilaya."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT timestamp FROM quota_history WHERE wilaya_code=? AND event_type='OPEN' ORDER BY id DESC LIMIT 1",
+            (wilaya_code,),
+        ) as cur:
+            row = await cur.fetchone()
+            return str(row[0]) if row else None
 async def add_inbox_entry(db_path: str, level: str, message: str, stack_trace: str | None) -> int:
     """Insert a new error/warning entry into the admin inbox."""
     async def _op():

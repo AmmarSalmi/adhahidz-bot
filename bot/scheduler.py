@@ -39,8 +39,12 @@ async def _poll_once(
         logger.debug("API fetch complete. Found %d wilayas.", len(statuses))
         now = datetime.now(timezone.utc).isoformat()
 
-        # Stamp the last successful fetch timestamp so /fetchinfo can report it
-        app.bot_data["last_fetch_ts"] = now
+        if statuses:
+            # Stamp the last successful fetch timestamp so /fetchinfo can report it
+            app.bot_data["last_fetch_ts"] = now
+        else:
+            logger.warning("Quota poll returned no data, skipping update cycle.")
+            return
 
         # Update last-known cache and record history
         last_known: dict[str, QuotaStatus] = app.bot_data.setdefault("last_known", {})
@@ -134,20 +138,27 @@ async def _poll_once(
                 await db_mod.reset_notified_for_wilaya(db_path, wilaya_code)
     except Exception as e:
         import httpx
-        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429:
-            # --- Fail-Safe Strategy ---
-            current_interval = app.bot_data.get("check_interval_seconds", 300)
-            new_interval = int(current_interval * 1.3)
+        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (429, 500, 502, 503, 504):
+            # --- Fail-Safe Strategy for Rate Limits or Server Errors ---
+            current_interval = app.bot_data.get("check_interval_seconds", 30)
+            # Increase interval if it's a 429, or if 500s are persistent
+            new_interval = int(current_interval * 1.5)
             
-            # Ensure it actually increases (at least by 1s)
-            if new_interval <= current_interval:
-                new_interval = current_interval + 1
+            # Cap the interval at 10 minutes to avoid stopping the bot indefinitely
+            if new_interval > 600:
+                new_interval = 600
+
+            # Ensure it actually increases (at least by 5s)
+            if new_interval <= current_interval + 5:
+                new_interval = current_interval + 5
 
             app.bot_data["check_interval_seconds"] = new_interval
             update_poll_interval(app, new_interval)
 
+            status_code = e.response.status_code
             logger.warning(
-                "Rate limit hit (HTTP 429). Throttling: %ds -> %ds",
+                "Critical API error (HTTP %d). Throttling: %ds -> %ds",
+                status_code,
                 current_interval,
                 new_interval,
             )
@@ -157,19 +168,23 @@ async def _poll_once(
             if admin_id:
                 try:
                     error_text = str(e)
-                    # Try to extract message from response if possible
                     try:
                         resp_json = e.response.json()
                         if "message" in resp_json:
                             error_text = resp_json["message"]
+                        elif "error" in resp_json:
+                            error_text = resp_json["error"]
                     except Exception:
                         pass
 
+                    emoji = "🚨" if status_code == 429 else "⚠️"
+                    reason = "Rate Limit" if status_code == 429 else "Server Error"
+                    
                     notif_msg = (
-                        "🚨 *Rate Limit Fail-Safe Triggered*\n\n"
-                        "The bot encountered a *Rate Limit (HTTP 429)* while checking quotas.\n\n"
+                        f"{emoji} *Fail-Safe Triggered ({reason})*\n\n"
+                        f"The bot encountered an error (HTTP {status_code}) while checking quotas.\n\n"
                         f"💬 *Error:* `{error_text}`\n\n"
-                        "🔄 *Action Taken:* Automatically increased check interval by 30%.\n"
+                        "🔄 *Action:* Automatically increased check interval.\n"
                         f"• Old interval: `{current_interval}s`\n"
                         f"• New interval: `{new_interval}s`"
                     )
@@ -177,7 +192,7 @@ async def _poll_once(
                         chat_id=admin_id, text=notif_msg, parse_mode="Markdown"
                     )
                 except Exception:
-                    logger.exception("Failed to notify admin about rate limit trigger")
+                    logger.exception("Failed to notify admin about fail-safe trigger")
         else:
             logger.exception("Scheduler poll failed")
 

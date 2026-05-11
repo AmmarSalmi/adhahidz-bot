@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from telegram.error import Forbidden, RetryAfter, TelegramError, TimedOut
+from telegram import CallbackQuery
+from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError, TimedOut
 
 from . import db as db_mod
 from .i18n import t
@@ -85,3 +86,19 @@ async def safe_send_photo(bot, user_id: int, db_path: str | None = None, **kwarg
     except TelegramError:
         logger.exception("Failed sending photo to user_id=%s", user_id)
         return False
+
+
+async def safe_query_answer(query: CallbackQuery, text: str | None = None) -> bool:
+    """Call query.answer() and silently discard stale/expired callback errors.
+
+    Returns True if the answer was sent, False if the query was already expired.
+    This prevents 'Query is too old' tracebacks that flood logs after a bot restart.
+    """
+    try:
+        await query.answer(text)
+        return True
+    except BadRequest as e:
+        if "query is too old" in str(e).lower() or "query id is invalid" in str(e).lower():
+            logger.debug("Stale callback query — ignoring: %s", e)
+            return False
+        raise  # Re-raise unexpected BadRequest errors
