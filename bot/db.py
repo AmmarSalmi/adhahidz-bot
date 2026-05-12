@@ -360,10 +360,29 @@ async def get_last_open_time(db_path: str, wilaya_code: str) -> str | None:
             row = await cur.fetchone()
             return str(row[0]) if row else None
 async def add_inbox_entry(db_path: str, level: str, message: str, stack_trace: str | None) -> int:
-    """Insert a new error/warning entry into the admin inbox."""
+    """Insert or update an error/warning entry in the admin inbox.
+    If an identical unresolved entry exists, its timestamp is updated instead of creating a duplicate.
+    """
     async def _op():
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA busy_timeout=3000;")
+            # Check for existing unresolved entry with same content
+            async with db.execute(
+                "SELECT id FROM admin_inbox WHERE level = ? AND message = ? AND IFNULL(stack_trace, '') = ? AND status = 'unresolved' AND is_hidden = 0 LIMIT 1",
+                (level, message, stack_trace or ""),
+            ) as cur:
+                row = await cur.fetchone()
+                if row:
+                    entry_id = row[0]
+                    # Update timestamp to "bump" it
+                    await db.execute(
+                        "UPDATE admin_inbox SET created_at = datetime('now', 'localtime') WHERE id = ?",
+                        (entry_id,),
+                    )
+                    await db.commit()
+                    return entry_id
+            
+            # Not found or resolved, insert new
             cur = await db.execute(
                 "INSERT INTO admin_inbox (level, message, stack_trace) VALUES (?, ?, ?)",
                 (level, message, stack_trace),
@@ -555,6 +574,29 @@ async def hide_all_inbox_entries(db_path: str) -> int:
             return cur.rowcount
 
     return await _with_retries(_op)
+
+
+async def deduplicate_inbox(db_path: str) -> int:
+    """Remove redundant entries from admin_inbox, keeping only the most recent one for each distinct message content."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            # Keep the max(id) for each unique combination of level, message, and stack_trace
+            cur = await db.execute(
+                """
+                DELETE FROM admin_inbox
+                WHERE id NOT IN (
+                    SELECT MAX(id)
+                    FROM admin_inbox
+                    GROUP BY level, message, IFNULL(stack_trace, '')
+                )
+                """
+            )
+            await db.commit()
+            return cur.rowcount
+
+    return await _with_retries(_op)
+
 
 
 # ---------------------------------------------------------------------------

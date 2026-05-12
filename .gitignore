@@ -13,7 +13,7 @@ debug_*
 *.txt
 
 # Python
-__pycache__/
+*/__pycache__/
 *.pyc
 *.pyo
 *.pyd

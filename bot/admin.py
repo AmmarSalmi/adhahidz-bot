@@ -326,6 +326,7 @@ def _inbox_submenu_keyboard(context) -> InlineKeyboardMarkup:
     """Build the admin inbox submenu keyboard."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📥 View Error/Warning Inbox", callback_data="admin:inbox:0")],
+        [InlineKeyboardButton("🧹 Hard Delete Duplicates", callback_data="admin:inbox_deduplicate")],
         [InlineKeyboardButton("📨 Inbox Settings ⚙️", callback_data="admin:inbox_settings")],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
     ])
@@ -1043,6 +1044,7 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             CallbackQueryHandler(on_admin_inbox_change_interval, pattern=r"^admin:inbox_change_interval$"),
             CallbackQueryHandler(on_admin_inbox_settings, pattern=r"^admin:inbox_settings$"),
             CallbackQueryHandler(on_admin_inbox_unmute, pattern=r"^admin:inbox_unmute$"),
+            CallbackQueryHandler(on_admin_inbox_deduplicate, pattern=r"^admin:inbox_deduplicate$"),
         ],
         states={
             AWAIT_BROADCAST_MESSAGE: [
@@ -1389,6 +1391,29 @@ async def on_admin_inbox_clear(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await query.answer(f"🧹 {count} entries hidden.")
     # Return to first page of inbox
+    await on_admin_inbox(update, context)
+
+
+async def on_admin_inbox_deduplicate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trigger the hard delete of duplicate inbox entries."""
+    query = update.callback_query
+    if not query:
+        return
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    db_path = context.application.bot_data.get("db_path", "")
+    try:
+        count = await db_mod.deduplicate_inbox(db_path)
+        await query.answer(f"🧹 {count} duplicate entries hard-deleted.")
+    except Exception as e:
+        logger.exception("Failed to deduplicate inbox")
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+    
+    # Refresh the inbox view (go to page 0)
     await on_admin_inbox(update, context)
 
 
