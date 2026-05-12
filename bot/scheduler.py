@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import timedelta
@@ -37,7 +38,7 @@ async def _poll_once(
         logger.debug("Fetching wilaya quotas from API...")
         statuses = await api_client.fetch_wilaya_quotas(proxy_url=proxy_url)
         logger.debug("API fetch complete. Found %d wilayas.", len(statuses))
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(ZoneInfo("Africa/Algiers")).isoformat()
 
         if statuses:
             # Stamp the last successful fetch timestamp so /fetchinfo can report it
@@ -369,10 +370,9 @@ def start_scheduler(
     )
 
     # 3. Excess Profile Removal (scheduled for a specific date or shortly after startup)
-    alg_tz = timezone(timedelta(hours=1))
-    fixed_removal_date = datetime(2026, 5, 10, 10, 0, 0, tzinfo=alg_tz)
+    fixed_removal_date = datetime(2026, 5, 10, 10, 0, 0, tzinfo=ZoneInfo("Africa/Algiers"))
     
-    if datetime.now(timezone.utc) < fixed_removal_date:
+    if datetime.now(ZoneInfo("Africa/Algiers")) < fixed_removal_date:
         scheduler.add_job(
             excess_profiles_wrapper,
             "date",
@@ -386,7 +386,7 @@ def start_scheduler(
         scheduler.add_job(
             excess_profiles_wrapper,
             "date",
-            run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
+            run_date=datetime.now(ZoneInfo("Africa/Algiers")) + timedelta(seconds=15),
             args=[app, db_path],
             misfire_grace_time=3600 * 24,  # 24h grace
             id="excess_removal_catchup",

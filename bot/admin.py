@@ -18,7 +18,8 @@ import asyncio
 import logging
 import os
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import re
 import aiosqlite
@@ -1082,7 +1083,7 @@ def build_admin_broadcast_handler() -> ConversationHandler:
 
 async def _gather_stats(db_path: str) -> dict:
     """Collect all admin statistics from the database in a single connection."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(ZoneInfo("Africa/Algiers"))
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     week_start = (now - timedelta(days=now.weekday())).replace(
         hour=0, minute=0, second=0, microsecond=0

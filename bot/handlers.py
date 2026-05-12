@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from telegram import ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update, constants
 from telegram.error import BadRequest
@@ -184,8 +185,8 @@ async def fetchinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     raw_ts: str | None = context.application.bot_data.get("last_fetch_ts")
     if raw_ts:
         try:
-            dt = datetime.fromisoformat(raw_ts).astimezone(timezone.utc)
-            time_str = f"`{dt.strftime('%Y-%m-%d %H:%M:%S')} UTC`"
+            dt = datetime.fromisoformat(raw_ts).astimezone(ZoneInfo("Africa/Algiers"))
+            time_str = f"`{dt.strftime('%Y-%m-%d %H:%M:%S')} CET`"
             fetch_line = t(lang, "🕐 *Last fetch:* {time}").format(time=time_str)
         except ValueError:
             fetch_line = t(lang, "🕐 *Last fetch:* {time}").format(time=f"`{raw_ts}`")

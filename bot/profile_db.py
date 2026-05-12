@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   payment_method  TEXT NOT NULL DEFAULT 'CASH',
   status          TEXT NOT NULL DEFAULT 'pending',
   is_valid        INTEGER NOT NULL DEFAULT 1,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 """
 

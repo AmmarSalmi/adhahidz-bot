@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   user_id     INTEGER NOT NULL,
   Wilaya_code TEXT    NOT NULL,
   notified    INTEGER NOT NULL DEFAULT 0,
-  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
   PRIMARY KEY (user_id)
 );
 CREATE TABLE IF NOT EXISTS user_settings (
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS quota_history (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   wilaya_code TEXT    NOT NULL,
   event_type  TEXT    NOT NULL, -- 'OPEN' or 'CLOSE'
-  timestamp   TEXT    NOT NULL DEFAULT (datetime('now')),
+  timestamp   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
   FOREIGN KEY (wilaya_code) REFERENCES wilayas(code)
 );
 CREATE TABLE IF NOT EXISTS admin_inbox (
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS admin_inbox (
   message     TEXT    NOT NULL,
   stack_trace TEXT,
   status      TEXT    NOT NULL DEFAULT 'unresolved', -- 'unresolved' or 'resolved'
-  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
   resolved_at TEXT,
   is_hidden   INTEGER NOT NULL DEFAULT 0
 );
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS sync_history (
   profile_id  INTEGER,
   user_id     INTEGER,
   details     TEXT,
-  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE TABLE IF NOT EXISTS global_settings (
   key         TEXT    PRIMARY KEY,
@@ -474,7 +474,7 @@ async def resolve_inbox_entry(db_path: str, entry_id: int) -> bool:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA busy_timeout=3000;")
             cur = await db.execute(
-                "UPDATE admin_inbox SET status = 'resolved', resolved_at = datetime('now') WHERE id = ?",
+                "UPDATE admin_inbox SET status = 'resolved', resolved_at = datetime('now', 'localtime') WHERE id = ?",
                 (entry_id,),
             )
             await db.commit()
