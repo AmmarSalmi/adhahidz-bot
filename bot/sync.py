@@ -245,7 +245,7 @@ async def _probe_nin(api_client, profile: profile_db.Profile, app) -> tuple[str,
             return "registered", "Active account (needs audit)"
 
         # 404 or other 4xx usually means not registered
-        if resp.status_code == 404 or "not found" in error_msg.lower():
+        if resp.status_code == 404 or any(kw in error_msg.lower() for kw in ("not found", "aucune inscription", "no registration")):
             await profile_db.set_profile_status(db_path, profile.id, "pending")
             await profile_db.mark_profile_synced(db_path, profile.id)
             return "pending", "Profile not found on server"
@@ -351,12 +351,22 @@ async def _deep_audit(
                 
                 last_error = msg
 
+                # Check for "Not Found" error in login (Server returns 400 with specific message)
+                if any(kw in msg.lower() for kw in ("aucune inscription", "not found", "no registration")):
+                    await profile_db.set_profile_status(db_path, profile.id, "pending")
+                    await profile_db.mark_profile_synced(db_path, profile.id)
+                    return "pending", "No registration found (reset to pending)"
+
                 # Check for terminal errors (Bad Password)
                 if any(kw in msg.lower() for kw in ("mot de passe", "password", "incorrect", "invalid credentials")):
                     await profile_db.set_profile_invalid(db_path, profile.id)
                     await profile_db.set_profile_status(db_path, profile.id, "registered")
                     await _notify_bad_password(app, profile)
                     return "bad_password", "Invalid password"
+                
+                # Check for account lockout
+                if any(kw in msg.lower() for kw in ("verrouillé", "locked", "too many attempts")):
+                    return "error", f"Account Locked: {msg[:40]}"
 
                 # If it's a captcha error, just continue the loop
                 await asyncio.sleep(1)
@@ -368,7 +378,7 @@ async def _deep_audit(
             await asyncio.sleep(2)
 
         if not access_token:
-            return "error", f"Login failed: {last_error[:40]}"
+            return "error", f"Login failed: {last_error[:50]}"
 
         # ── Fetch orders ──────────────────────────────────────────────────
         order_headers = {
