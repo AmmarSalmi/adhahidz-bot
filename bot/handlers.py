@@ -520,7 +520,7 @@ async def on_my_chat_member_update(update: Update, context: ContextTypes.DEFAULT
         user_id = update.effective_user.id
         # In private chats, 'kicked' status means the user blocked the bot.
         if new_status == constants.ChatMemberStatus.BANNED:
-            logger.warning("User %s blocked the bot. Deleting all data.", user_id)
+            logger.info("User %s blocked the bot. Deleting all data.", user_id)
             db_path = context.application.bot_data.get("db_path")
             if db_path:
                 try:

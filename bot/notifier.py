@@ -37,7 +37,7 @@ async def notify_users(bot, user_ids: list[int], message: str, db_path: str | No
                 await asyncio.sleep(1.0)
                 continue
             except Forbidden:
-                logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+                logger.info("Bot was blocked by user_id=%s. Deleting user data.", user_id)
                 if db_path:
                     await db_mod.delete_user_data(db_path, user_id)
                 break
@@ -58,7 +58,7 @@ async def safe_send_message(bot, user_id: int, db_path: str | None = None, **kwa
         await bot.send_message(chat_id=user_id, **kwargs)
         return True
     except Forbidden:
-        logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+        logger.info("Bot was blocked by user_id=%s. Deleting user data.", user_id)
         if db_path:
             await db_mod.delete_user_data(db_path, user_id)
         return False
@@ -76,7 +76,7 @@ async def safe_send_photo(bot, user_id: int, db_path: str | None = None, **kwarg
         await bot.send_photo(chat_id=user_id, **kwargs)
         return True
     except Forbidden:
-        logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+        logger.info("Bot was blocked by user_id=%s. Deleting user data.", user_id)
         if db_path:
             await db_mod.delete_user_data(db_path, user_id)
         return False
@@ -99,9 +99,9 @@ async def safe_query_answer(query: CallbackQuery, text: str | None = None) -> bo
         return True
     except BadRequest as e:
         if "query is too old" in str(e).lower() or "query id is invalid" in str(e).lower():
-            logger.warning("Stale callback query — ignoring: %s", e)
+            logger.info("Stale callback query — ignoring: %s", e)
             return False
         raise  # Re-raise unexpected BadRequest errors
     except TimedOut:
-        logger.warning("Telegram API request timed out answering callback query. Proceeding anyway.")
+        logger.info("Telegram API request timed out answering callback query. Proceeding anyway.")
         return True

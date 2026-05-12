@@ -1010,7 +1010,7 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
                     )
                     success += 1
                 except Forbidden:
-                    logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+                    logger.info("Bot was blocked by user_id=%s. Deleting user data.", user_id)
                     await db_mod.delete_user_data(db_path, user_id)
                     failed += 1
                 except Exception as e:

@@ -386,7 +386,7 @@ async def remind_preregistered_profiles(app) -> None:
             )
             logger.info("Sent pre-registered reminder to user %s (%d profiles)", user_id, len(profs))
         except Forbidden:
-            logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+            logger.info("Bot was blocked by user_id=%s. Deleting user data.", user_id)
             await db_mod.delete_user_data(db_path, user_id)
         except Exception:
             logger.exception("Failed to send reminder to user %s", user_id)
@@ -538,7 +538,7 @@ async def _nudge_preregistered_profiles(
                     parse_mode="Markdown",
                 )
         except Forbidden:
-            logger.warning("Bot was blocked by user_id=%s. Deleting user data.", user_id)
+            logger.info("Bot was blocked by user_id=%s. Deleting user data.", user_id)
             await db_mod.delete_user_data(db_path, user_id)
         except Exception:
             logger.exception("Failed to send urgent nudge to user %s", user_id)
@@ -645,7 +645,7 @@ async def _process_registered_profiles(
                     parse_mode="Markdown",
                 )
     except Forbidden:
-        logger.warning("Bot was blocked by user_id=%s. Deleting all data.", user_id)
+        logger.info("Bot was blocked by user_id=%s. Deleting all data.", user_id)
         await db_mod.delete_user_data(db_path, user_id)
     except Exception:
         logger.exception("Failed to process registered profiles for user %s", user_id)
@@ -877,7 +877,7 @@ async def _process_user_profiles(
                             parse_mode="Markdown",
                         )
     except Forbidden:
-        logger.warning("Bot was blocked by user_id=%s. Deleting all data.", user_id)
+        logger.info("Bot was blocked by user_id=%s. Deleting all data.", user_id)
         await db_mod.delete_user_data(db_path, user_id)
     except Exception:
         logger.exception("Failed to process profiles for user %s", user_id)

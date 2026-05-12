@@ -74,9 +74,9 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def on_menu_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     import logging
-    logging.getLogger(__name__).warning("on_menu_nav triggered with data: %s", query.data)
+    logging.getLogger(__name__).info("on_menu_nav triggered with data: %s", query.data)
     if not await safe_query_answer(query):
-        logging.getLogger(__name__).warning("safe_query_answer returned False for on_menu_nav!")
+        logging.getLogger(__name__).info("safe_query_answer returned False for on_menu_nav!")
         return
     data = query.data
     lang = await get_lang(context, update.effective_user.id)
@@ -103,10 +103,10 @@ async def on_menu_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def on_menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     import logging
-    logging.getLogger(__name__).warning("on_menu_cmd triggered with data: %s", query.data)
+    logging.getLogger(__name__).info("on_menu_cmd triggered with data: %s", query.data)
     # Acknowledge the button press
     if not await safe_query_answer(query):
-        logging.getLogger(__name__).warning("safe_query_answer returned False for on_menu_cmd!")
+        logging.getLogger(__name__).info("safe_query_answer returned False for on_menu_cmd!")
         return
     data = query.data
     

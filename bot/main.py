@@ -257,7 +257,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Handle blocked bot errors gracefully
     if isinstance(context.error, Forbidden):
-        logger.warning("Bot was blocked by a user (Forbidden error)")
+        logger.info("Bot was blocked by a user (Forbidden error)")
         return
 
     # Handle timeouts and network errors gracefully (suppress traceback for cleanliness)
