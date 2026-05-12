@@ -140,7 +140,7 @@ async def ap_collect_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return AP_PHONE
     _ap_state(context)["phone"] = text
     await update.message.reply_text(
-        t(lang, "✅ Phone recorded.\n\nStep 5/9 — Enter a *password* for the adhahi.dz account:\n_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_"),
+        t(lang, "✅ Phone recorded.\n\nStep 5/9 — Enter a *password* for the adhahi.dz account:\n_(8-20 characters, must include upper, lower, digit, and symbol; no dots)_"),
         parse_mode="Markdown",
     )
     return AP_PASSWORD
@@ -909,14 +909,17 @@ async def _revalidate_and_warn(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.exception("Failed to update is_valid during re-validation")
 
     if err_fields:
+        from .registration import get_profile_validation_errors
+        lang = await get_lang(context, user_id)
         msg = (
-            "⚠️ *Warning: Profile still invalid*\n\n"
-            "This profile is currently **excluded from auto-registration** because it still contains errors:\n"
+            t(lang, "⚠️ *Warning: Profile still invalid*") + "\n\n" +
+            t(lang, "Your input will most likely be rejected by the server if we try to register you for those reasons:") + "\n"
         )
-        for err in err_fields:
-            msg += f"  • Invalid **{err}**\n"
+        detailed_errs = get_profile_validation_errors(profile, lang)
+        for err in detailed_errs:
+            msg += f"  • {err}\n"
         
-        msg += "\nPlease fix these errors in /profiles to re-enable auto-registration for this profile."
+        msg += "\n" + t(lang, "Please fix these errors in /profiles to re-enable auto-registration for this profile.")
         
         if update.callback_query:
             await update.callback_query.message.reply_text(msg, parse_mode="Markdown")

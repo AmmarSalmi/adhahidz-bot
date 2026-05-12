@@ -1576,24 +1576,35 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
 
             # Notify user if we fixed something or found errors
             if not is_silent and (user_fixed_count > 0 or user_invalid_fields):
-                msg_parts = ["⚠️ *Profile Maintenance Notification*\n"]
+                from .registration import get_profile_validation_errors
+                lang = await get_lang(context, user_id)
+                msg_parts = [t(lang, "⚠️ *Profile Maintenance Notification*") + "\n"]
                 
                 if user_fixed_count > 0:
                     msg_parts.append(
-                        f"Our routine check detected an **invalid email format** in {user_fixed_count} profile(s). "
-                        "We have automatically cleared those emails to ensure your profiles remain compatible.\n"
+                        t(lang, "Our routine check detected an **invalid email format** in {user_fixed_count} profile(s). "
+                        "We have automatically cleared those emails to ensure your profiles remain compatible.").format(user_fixed_count=user_fixed_count) + "\n"
                     )
                 
                 if user_invalid_fields:
                     msg_parts.append(
-                        "We also found **major errors** in the following profiles. These profiles **have been excluded** from "
-                        "auto-registration batches until they are corrected:\n"
+                        t(lang, "We also found **major errors** in the following profiles. These profiles **have been excluded** from "
+                        "auto-registration batches until they are corrected:") + "\n"
                     )
-                    for prof_name, field in user_invalid_fields:
-                        msg_parts.append(f"  • Profile *{prof_name}*: Invalid **{field}**")
+                    
+                    # We need the profile objects again to get detailed errors
+                    for p in profiles:
+                        field_errs = validate_profile_compliance(p)
+                        if field_errs:
+                            prof_name = p.name or f"#{p.id}"
+                            msg_parts.append(f"👤 *{prof_name}*:")
+                            detailed_errs = get_profile_validation_errors(p, lang)
+                            for err in detailed_errs:
+                                msg_parts.append(f"  • {err}")
+                            msg_parts.append("") # spacer
                     
                     msg_parts.append(
-                        "\n⚠️ *Action Required:* Please use /profiles to edit and fix them immediately to re-enable them for the next quota window."
+                        t(lang, "⚠️ *Action Required:* Please use /profiles to edit and fix them immediately to re-enable them for the next quota window.")
                     )
 
                 try:

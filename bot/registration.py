@@ -341,7 +341,7 @@ async def on_commune_selected(
             break
 
     lang = await get_lang(context, update.effective_user.id)
-    await query.edit_message_text(t(lang, "✅ Commune *{commune_name}* selected.\n\nStep 6/10 — Enter a *password* for your adhahi.dz account:\n_(8-16 characters, must include upper, lower, digit, and symbol; no dots)_").format(commune_name=commune_name), parse_mode="Markdown")
+    await query.edit_message_text(t(lang, "✅ Commune *{commune_name}* selected.\n\nStep 6/10 — Enter a *password* for your adhahi.dz account:\n_(8-20 characters, must include upper, lower, digit, and symbol; no dots)_").format(commune_name=commune_name), parse_mode="Markdown")
     return ASK_PASSWORD
 
 
@@ -492,8 +492,8 @@ def _validate_password(pw: str) -> list[str]:
     errors: list[str] = []
     if len(pw) < 8:
         errors.append("Must be at least 8 characters long")
-    if len(pw) > 16:
-        errors.append("Must be no more than 16 characters long")
+    if len(pw) > 20:
+        errors.append("Must be no more than 20 characters long")
     if not any(c.isdigit() for c in pw):
         errors.append("Must contain at least one digit (0-9)")
     if not any(c.islower() for c in pw):
@@ -552,7 +552,7 @@ def validate_profile_compliance(p: Any) -> list[str]:
     if not phone.isdigit() or len(phone) != 10 or not phone.startswith("0"):
         errors.append("Phone")
         
-    # 4. Password: complex validation (8-16 chars, upper, lower, digit, symbol, no dots)
+    # 4. Password: complex validation (8-20 chars, upper, lower, digit, symbol, no dots)
     pw_errs = _validate_password(password)
     if pw_errs:
         errors.append("Password")
@@ -560,6 +560,64 @@ def validate_profile_compliance(p: Any) -> list[str]:
     # 5. Email: valid format if present
     if email and not validate_email_format(email):
         errors.append("Email")
+             
+    return errors
+
+
+def get_profile_validation_errors(p: Any, lang: str) -> list[str]:
+    """
+    Returns a list of localized human-readable error messages for a profile.
+    Used for notifying users during non-silent admin audits.
+    """
+    # Normalize input
+    if hasattr(p, "nin"): # Dataclass (Profile)
+        nin = str(p.nin)
+        cnibe = str(p.cnibe)
+        phone = str(p.phone)
+        password = str(p.password)
+        email = str(p.email or "")
+    else: # Dictionary
+        nin = str(p.get("nin") or p.get("NIN") or "")
+        cnibe = str(p.get("cnibe") or p.get("CNIBE") or "")
+        phone = str(p.get("phone") or p.get("phoneNumber") or "")
+        password = str(p.get("password") or "")
+        email = str(p.get("email") or "")
+
+    errors = []
+    
+    # 1. NIN
+    if not nin.isdigit() or len(nin) != 18:
+        errors.append(t(lang, "NIN must be exactly 18 digits."))
+        
+    # 2. CNIBE
+    if not cnibe.isdigit() or len(cnibe) != 9:
+        errors.append(t(lang, "CNIBE must be exactly 9 digits."))
+        
+    # 3. Phone
+    if not phone.isdigit() or len(phone) != 10 or not phone.startswith("0"):
+        errors.append(t(lang, "Phone must be 10 digits starting with 0."))
+        
+    # 4. Password (detailed)
+    if len(password) < 8:
+        errors.append(t(lang, "Password is shorter than 8 characters."))
+    if len(password) > 20:
+        errors.append(t(lang, "Password is longer than 20 characters."))
+    if not any(c.isdigit() for c in password):
+        errors.append(t(lang, "Password must contain at least one digit (0-9)."))
+    if not any(c.islower() for c in password):
+        errors.append(t(lang, "Password must contain at least one lowercase letter (a-z)."))
+    if not any(c.isupper() for c in password):
+        errors.append(t(lang, "Password must contain at least one uppercase letter (A-Z)."))
+    if not any(c in "!@#$%^&*()_+-=?" for c in password):
+        errors.append(t(lang, "Password must contain at least one special character (!@#$%^&*()_+-=?)."))
+    if "." in password:
+        errors.append(t(lang, "The dot (.) character is not allowed in passwords."))
+    if any(c.isspace() for c in password):
+        errors.append(t(lang, "Password must not contain whitespace."))
+        
+    # 5. Email
+    if email and not validate_email_format(email):
+        errors.append(t(lang, "Invalid email format."))
              
     return errors
 
