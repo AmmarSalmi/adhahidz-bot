@@ -260,9 +260,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning("Bot was blocked by a user (Forbidden error)")
         return
 
-    # Handle timeouts gracefully
-    if isinstance(context.error, TimedOut):
-        logger.warning("Telegram API request timed out. This usually happens during high activity or network congestion.", exc_info=context.error)
+    # Handle timeouts and network errors gracefully (suppress traceback for cleanliness)
+    if isinstance(context.error, (TimedOut, NetworkError)):
+        logger.warning("Telegram API request %s. This usually happens during high activity or network congestion.", 
+                       "timed out" if isinstance(context.error, TimedOut) else "network error")
         return
 
     # Log other errors
