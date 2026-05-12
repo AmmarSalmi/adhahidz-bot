@@ -73,7 +73,10 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_menu_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    import logging
+    logging.getLogger(__name__).warning("on_menu_nav triggered with data: %s", query.data)
     if not await safe_query_answer(query):
+        logging.getLogger(__name__).warning("safe_query_answer returned False for on_menu_nav!")
         return
     data = query.data
     lang = await get_lang(context, update.effective_user.id)
@@ -99,8 +102,11 @@ async def on_menu_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def on_menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    import logging
+    logging.getLogger(__name__).warning("on_menu_cmd triggered with data: %s", query.data)
     # Acknowledge the button press
     if not await safe_query_answer(query):
+        logging.getLogger(__name__).warning("safe_query_answer returned False for on_menu_cmd!")
         return
     data = query.data
     
@@ -140,18 +146,19 @@ async def on_menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # The ConversationHandlers are caught by their respective CallbackQueryHandler entry_points
 
 async def handle_reply_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text
-    if not text:
+    message = update.effective_message
+    if not message or not message.text:
         return
+    text = message.text
     lang = await get_lang(context, update.effective_user.id)
     
     if text == t(lang, "👤 Account"):
-        await update.message.reply_text(t(lang, "👤 *Account Menu*\nManage your wilaya subscription:"), reply_markup=get_account_menu_keyboard(lang), parse_mode="Markdown")
+        await message.reply_text(t(lang, "👤 *Account Menu*\nManage your wilaya subscription:"), reply_markup=get_account_menu_keyboard(lang), parse_mode="Markdown")
     elif text == t(lang, "👥 Profiles"):
         from .admin import is_admin
-        await update.message.reply_text(t(lang, "👥 *Profiles Menu*\nManage your registration profiles:"), reply_markup=get_profiles_menu_keyboard(lang, is_admin(update)), parse_mode="Markdown")
+        await message.reply_text(t(lang, "👥 *Profiles Menu*\nManage your registration profiles:"), reply_markup=get_profiles_menu_keyboard(lang, is_admin(update)), parse_mode="Markdown")
     elif text == t(lang, "⚙️ Settings"):
-        await update.message.reply_text(t(lang, "⚙️ *Settings Menu*\nBot settings and info:"), reply_markup=get_settings_menu_keyboard(lang), parse_mode="Markdown")
+        await message.reply_text(t(lang, "⚙️ *Settings Menu*\nBot settings and info:"), reply_markup=get_settings_menu_keyboard(lang), parse_mode="Markdown")
     elif text == t(lang, "🌐 Language / اللغة"):
         from .i18n import _TRANSLATIONS
         kb = InlineKeyboardMarkup([
@@ -159,4 +166,4 @@ async def handle_reply_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             [InlineKeyboardButton("Français 🇫🇷", callback_data="menu:cmd:lang:fr")],
             [InlineKeyboardButton("English 🇬🇧", callback_data="menu:cmd:lang:en")],
         ])
-        await update.message.reply_text(t(lang, "Select language / اختر اللغة / Choisissez la langue:"), reply_markup=kb)
+        await message.reply_text(t(lang, "Select language / اختر اللغة / Choisissez la langue:"), reply_markup=kb)

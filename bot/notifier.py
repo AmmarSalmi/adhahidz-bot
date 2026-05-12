@@ -99,6 +99,9 @@ async def safe_query_answer(query: CallbackQuery, text: str | None = None) -> bo
         return True
     except BadRequest as e:
         if "query is too old" in str(e).lower() or "query id is invalid" in str(e).lower():
-            logger.debug("Stale callback query — ignoring: %s", e)
+            logger.warning("Stale callback query — ignoring: %s", e)
             return False
         raise  # Re-raise unexpected BadRequest errors
+    except TimedOut:
+        logger.warning("Telegram API request timed out answering callback query. Proceeding anyway.")
+        return True

@@ -229,7 +229,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Handle timeouts gracefully
     if isinstance(context.error, TimedOut):
-        logger.warning("Telegram API request timed out. This usually happens during high activity or network congestion.")
+        logger.warning("Telegram API request timed out. This usually happens during high activity or network congestion.", exc_info=context.error)
         return
 
     # Log other errors
@@ -248,6 +248,7 @@ def main() -> None:
     # Default is 20s for read/write, 5s for connect.
     # We'll increase them to handle periods of high API load.
     tg_request = HTTPXRequest(
+        connection_pool_size=100,
         connect_timeout=15.0, 
         read_timeout=30.0, 
         write_timeout=30.0,
@@ -275,8 +276,11 @@ def main() -> None:
 
     # Message handlers
     app.add_handler(MessageHandler(filters.REPLY & filters.TEXT & filters.ChatType.PRIVATE, manual_captcha_reply_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wilaya_lookup_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_reply_menu))
+    
+    # We use different groups for global text handlers to prevent them from swallowing updates
+    # intended for other handlers. handle_reply_menu should be checked before wilaya_lookup_handler.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_reply_menu), group=0)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wilaya_lookup_handler), group=1)
 
     # Simple command handlers
     only_private = filters.ChatType.PRIVATE
