@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 import httpx
+from telegram.helpers import escape_markdown
 
 from . import db as db_mod
 from . import profile_db
@@ -429,7 +430,10 @@ async def _notify_pre_registered_fresh(app, profile: profile_db.Profile) -> None
         "Please complete verification now:\n"
         "🔗 https://adhahi.dz/activation"
     )
-    text = t(lang, msg_key).format(name=pname, nin=profile.nin)
+    text = t(lang, msg_key).format(
+        name=escape_markdown(pname, version=1),
+        nin=escape_markdown(profile.nin, version=1)
+    )
     await safe_send_message(app.bot, profile.user_id, db_path=db_path,
                             text=text, parse_mode="Markdown")
 
@@ -454,7 +458,9 @@ async def _notify_pre_registered_cooldown(
         "🔗 https://adhahi.dz/activation"
     )
     text = t(lang, msg_key).format(
-        name=pname, nin=profile.nin, remaining_time=remaining_time
+        name=escape_markdown(pname, version=1),
+        nin=escape_markdown(profile.nin, version=1),
+        remaining_time=remaining_time
     )
     await safe_send_message(app.bot, profile.user_id, db_path=db_path,
                             text=text, parse_mode="Markdown")
@@ -474,7 +480,10 @@ async def _notify_bad_password(app, profile: profile_db.Profile) -> None:
         "🔗 Reset password: https://adhahi.dz/forgot-password\n\n"
         "After resetting, update your profile via /profiles → Edit Profile."
     )
-    text = t(lang, msg_key).format(name=pname, nin=profile.nin)
+    text = t(lang, msg_key).format(
+        name=escape_markdown(pname, version=1),
+        nin=escape_markdown(profile.nin, version=1)
+    )
     await safe_send_message(app.bot, profile.user_id, db_path=db_path,
                             text=text, parse_mode="Markdown")
 
@@ -495,7 +504,10 @@ async def _notify_no_order(app, profile: profile_db.Profile) -> None:
         "Rest assured — the bot will still try to place an order for you "
         "next time your wilaya's quota opens."
     )
-    text = t(lang, msg_key).format(name=pname, nin=profile.nin)
+    text = t(lang, msg_key).format(
+        name=escape_markdown(pname, version=1),
+        nin=escape_markdown(profile.nin, version=1)
+    )
     await safe_send_message(app.bot, profile.user_id, db_path=db_path,
                             text=text, parse_mode="Markdown")
 
@@ -514,6 +526,6 @@ async def _notify_ordered(app, profile: profile_db.Profile) -> None:
         "Also, watch for SMS sent by the website that sets your appointment.\n\n"
         "Have a blessed Eid Al-Adha! 🐑"
     )
-    text = t(lang, msg_key).format(name=pname)
+    text = t(lang, msg_key).format(name=escape_markdown(pname, version=1))
     await safe_send_message(app.bot, profile.user_id, db_path=db_path,
                             text=text, parse_mode="Markdown")
