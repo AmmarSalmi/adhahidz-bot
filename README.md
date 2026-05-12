@@ -2,6 +2,10 @@
 
 A fully dockerized Telegram bot that periodically checks Wilaya-level quota availability from a REST API and notifies subscribed users when quota opens.
 
+### Codebase audit
+
+A **security, privacy, reliability, and optimization** review is maintained in [`scratch/CODEBASE_AUDIT.md`](scratch/CODEBASE_AUDIT.md). The `scratch/` directory is listed in `.gitignore` for local working files; to **track the audit in git**, add it explicitly (for example `git add -f scratch/CODEBASE_AUDIT.md`).
+
 ### Features
 - **Quota Monitoring**: Periodically checks Wilaya-level quota availability from the REST API.
 - **Interactive UI**: Navigate easily using persistent bottom menus and hierarchical inline keyboards instead of memorizing commands.
@@ -18,7 +22,7 @@ A fully dockerized Telegram bot that periodically checks Wilaya-level quota avai
 - **Quota History & Analysis**: Automatically records every "OPEN" and "CLOSE" event for all Wilayas in the database. This data allows for analyzing quota patterns, measuring window durations, and understanding the frequency of availability changes. Recent history is visible directly in the admin stats panel.
 - **Hierarchical Admin Dashboard**: Includes a decluttered, hidden admin panel organized into logical submenus: **Users Control**, **Profiles Control**, **Infrastructure & Proxy**, and **Admin Inbox**. Features toggleable "restricted mode", **live concurrency limit adjustment**, **live check interval updates**, **granular proxy controls**, and **recent quota event history**.
 - **Self-Healing Database Migrations**: The bot features a built-in schema migration engine that automatically detects and applies missing columns or table updates (e.g., the `is_hidden` inbox column) upon startup, ensuring seamless updates even when the local database is reused across versions.
-- **Rate Limit Fail-Safe Strategy**: The bot is highly reactive to server-side blocking. If an HTTP 429 (Too Many Requests) is detected during quota monitoring, the bot automatically **increases the check interval by 30%** and immediately alerts the administrator with the error details.
+- **Rate Limit Fail-Safe Strategy**: The bot is highly reactive to server-side blocking. If an HTTP 429 (Too Many Requests) or certain 5xx responses are detected during quota monitoring, the bot automatically **increases the check interval** (currently by a **×1.5** multiplier, capped) and immediately alerts the administrator with the error details.
 - **Improved Log Stream**: Suppresses verbose library success logs (HTTP 200s) and silences noisy tracebacks for common transient events (like **Telegram API timeouts/congestion**). To maintain a clean production log, routine events such as **menu navigation triggers** and **user-blocking detections** are now logged at the `INFO` level instead of `WARNING`.
 - **Bot Token Conflict Monitoring**: Automatically detects if another instance of the bot is running with the same token (HTTP 409 Conflict). It immediately alerts the administrator and logs a critical error to prevent "ghost" instances from swallowing updates.
 - **Granular Proxy Management**: Admin can independently toggle residential proxy usage for three critical workflows: Wilaya monitoring, Auto-registration, and Profile status checking.
