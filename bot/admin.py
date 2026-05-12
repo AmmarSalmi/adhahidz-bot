@@ -1606,7 +1606,7 @@ async def on_admin_force_check(update: Update, context: ContextTypes.DEFAULT_TYP
             # Notify user if we fixed something or found errors
             if not is_silent and (user_fixed_count > 0 or user_invalid_fields):
                 from .registration import get_profile_validation_errors
-                lang = await get_lang(context, user_id)
+                lang = await db_mod.get_user_language(db_path, user_id)
                 msg_parts = [t(lang, "⚠️ *Profile Maintenance Notification*") + "\n"]
                 
                 if user_fixed_count > 0:
@@ -1957,6 +1957,7 @@ async def _run_sync_orders_task(app, admin_id: int, db_path: str) -> None:
     found_orders = [] # list of profile info strings
     blocked_users = [] # list of profile info strings
     failed_logins = 0
+    secured_orders = 0
     
     # Base headers for the sync requests
     base_headers = {
