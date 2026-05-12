@@ -401,4 +401,118 @@ def start_scheduler(
         interval_mins = app.bot_data.get("inbox_report_interval_mins", 60)
         update_inbox_report_interval(app, interval_mins)
 
+    # Load persisted sync schedules from DB
+    asyncio.create_task(_load_persisted_sync_schedules(app, db_path))
+
     return scheduler
+
+
+# ---------------------------------------------------------------------------
+# Global sync schedule management
+# ---------------------------------------------------------------------------
+
+async def _global_sync_wrapper(app) -> None:
+    """Run the global sync, guarded against duplicate executions."""
+    if app.bot_data.get("global_sync_running"):
+        logger.info("Skipping scheduled global sync — already running")
+        return
+
+    app.bot_data["global_sync_running"] = True
+    try:
+        from .sync import run_global_sync
+        await run_global_sync(app)
+    except Exception:
+        logger.exception("Scheduled global sync failed")
+    finally:
+        app.bot_data["global_sync_running"] = False
+
+
+async def _load_persisted_sync_schedules(app, db_path: str) -> None:
+    """Load and register all active sync schedules from DB on startup."""
+    try:
+        schedules = await db_mod.get_active_sync_schedules(db_path)
+        for s in schedules:
+            add_sync_job(
+                app,
+                s["id"],
+                s["schedule_type"],
+                interval_s=s.get("interval_seconds"),
+                run_at=s.get("run_at"),
+            )
+        if schedules:
+            logger.info("Loaded %d persisted sync schedule(s)", len(schedules))
+    except Exception:
+        logger.exception("Failed to load persisted sync schedules")
+
+
+def add_sync_job(
+    app,
+    schedule_id: int,
+    schedule_type: str,
+    *,
+    interval_s: int | None = None,
+    run_at: str | None = None,
+) -> None:
+    """Add a sync job to the running scheduler."""
+    scheduler = app.bot_data.get("scheduler")
+    if not scheduler:
+        return
+
+    job_id = f"global_sync_{schedule_id}"
+
+    # Remove existing job with same ID if any
+    if scheduler.get_job(job_id):
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+
+    try:
+        if schedule_type == "interval" and interval_s:
+            scheduler.add_job(
+                _global_sync_wrapper,
+                "interval",
+                args=[app],
+                seconds=interval_s,
+                id=job_id,
+                max_instances=1,
+                misfire_grace_time=3600,
+                coalesce=True,
+            )
+            logger.info("Added sync interval job %s: every %ds", job_id, interval_s)
+        elif schedule_type == "once" and run_at:
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            dt = _dt.fromisoformat(run_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_ZI("Africa/Algiers"))
+            if dt > _dt.now(_ZI("Africa/Algiers")):
+                scheduler.add_job(
+                    _global_sync_wrapper,
+                    "date",
+                    args=[app],
+                    run_date=dt,
+                    id=job_id,
+                    misfire_grace_time=3600 * 24,
+                )
+                logger.info("Added one-time sync job %s: at %s", job_id, run_at)
+            else:
+                logger.info("Skipping past one-time sync job %s (was %s)", job_id, run_at)
+    except Exception:
+        logger.exception("Failed to add sync job %s", job_id)
+
+
+def remove_all_sync_jobs(app) -> None:
+    """Remove all global_sync_* jobs from the running scheduler."""
+    scheduler = app.bot_data.get("scheduler")
+    if not scheduler:
+        return
+    jobs = scheduler.get_jobs()
+    for job in jobs:
+        if job.id.startswith("global_sync_"):
+            try:
+                scheduler.remove_job(job.id)
+                logger.info("Removed sync job %s", job.id)
+            except Exception:
+                logger.exception("Failed to remove sync job %s", job.id)
+

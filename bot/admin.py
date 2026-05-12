@@ -49,6 +49,8 @@ AWAIT_CONCURRENCY_LIMIT = 4
 AWAIT_WILAYA_INTERVAL = 5
 AWAIT_PROFILE_ID_CHECK = 6
 AWAIT_INBOX_REPORT_INTERVAL = 7
+AWAIT_SYNC_INTERVAL = 8
+AWAIT_SYNC_DATETIME = 9
 
 # ---------------------------------------------------------------------------
 # Admin identity — loaded once from env at import time
@@ -292,6 +294,8 @@ def _profiles_submenu_keyboard(context) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
         [InlineKeyboardButton("🤫 Silent Force Check", callback_data="admin:force_check:silent")],
         [InlineKeyboardButton("🆔 Check Profile by ID", callback_data="admin:check_profile_start")],
+        [InlineKeyboardButton("🌐 Global Profile Sync", callback_data="admin:global_sync")],
+        [InlineKeyboardButton("⏰ Schedule Sync", callback_data="admin:sync_schedule_menu")],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
     ])
 
@@ -2041,3 +2045,277 @@ async def _run_sync_orders_task(app, admin_id: int, db_path: str) -> None:
         await app.bot.send_message(chat_id=admin_id, text="\n".join(report_lines), parse_mode="Markdown")
     except Exception:
         logger.exception("Failed to send sync report to admin")
+
+
+# ---------------------------------------------------------------------------
+# Global Profile Sync — manual trigger + schedule management
+# ---------------------------------------------------------------------------
+
+async def on_admin_global_sync(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Trigger the global profile sync immediately as a background task."""
+    query = update.callback_query
+    if not query:
+        return
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    # Prevent duplicate runs
+    if context.application.bot_data.get("global_sync_running"):
+        await query.edit_message_text(
+            "⚠️ *Global Sync Already Running*\n\n"
+            "A sync is already in progress. Please wait for it to finish.",
+            parse_mode="Markdown",
+        )
+        return
+
+    context.application.bot_data["global_sync_running"] = True
+
+    async def _run():
+        try:
+            from .sync import run_global_sync
+            await run_global_sync(context.application)
+        except Exception:
+            logger.exception("Global sync failed")
+        finally:
+            context.application.bot_data["global_sync_running"] = False
+
+    asyncio.create_task(_run())
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data="admin:profiles_submenu")]]
+    )
+    await query.edit_message_text(
+        "🔄 *Global Profile Sync Launched*\n\n"
+        "The sync is now running in the background.\n"
+        "You will receive a detailed summary when it completes.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_sync_schedule_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show the sync schedule management menu."""
+    query = update.callback_query
+    if not query:
+        return
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    db_path = context.application.bot_data.get("db_path", "")
+    schedules = await db_mod.get_active_sync_schedules(db_path)
+
+    lines = ["⏰ *Sync Schedule Manager*\n"]
+    if schedules:
+        lines.append("*Active Schedules:*")
+        for s in schedules:
+            if s["schedule_type"] == "interval":
+                hours = (s["interval_seconds"] or 0) / 3600
+                lines.append(f"  • ID `{s['id']}`: Every *{hours:.1f}h*")
+            else:
+                lines.append(f"  • ID `{s['id']}`: One-time at `{s['run_at']}`")
+    else:
+        lines.append("_No active schedules._")
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔁 Set Interval", callback_data="admin:sync_set_interval")],
+        [InlineKeyboardButton("📅 Set One-Time", callback_data="admin:sync_set_once")],
+        [InlineKeyboardButton("❌ Clear All Schedules", callback_data="admin:sync_clear_all")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin:profiles_submenu")],
+    ])
+
+    await query.edit_message_text(
+        "\n".join(lines), reply_markup=keyboard, parse_mode="Markdown"
+    )
+
+
+async def on_admin_sync_set_interval(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Start the interval schedule flow."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Cancel", callback_data="admin:broadcast_cancel")]]
+    )
+    await query.edit_message_text(
+        "🔁 *Set Sync Interval*\n\n"
+        "Enter the interval in hours (e.g. `12` for every 12 hours, `0.5` for 30 minutes):",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return AWAIT_SYNC_INTERVAL
+
+
+async def on_admin_sync_interval_received(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Process the interval input and create the schedule."""
+    if not is_admin(update):
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_SYNC_INTERVAL
+
+    try:
+        hours = float(msg.text.strip())
+        if hours <= 0 or hours > 168:  # max 1 week
+            raise ValueError("Out of range")
+        interval_seconds = int(hours * 3600)
+    except ValueError:
+        await msg.reply_text(
+            "❌ *Invalid Input*\n\nEnter a number between 0.5 and 168 hours.",
+            parse_mode="Markdown",
+        )
+        return AWAIT_SYNC_INTERVAL
+
+    db_path = context.application.bot_data.get("db_path", "")
+    schedule_id = await db_mod.save_sync_schedule(db_path, "interval", interval_seconds=interval_seconds)
+
+    # Add to running scheduler
+    from .scheduler import add_sync_job
+    add_sync_job(context.application, schedule_id, "interval", interval_s=interval_seconds)
+
+    await msg.reply_text(
+        f"✅ *Sync Schedule Created*\n\n"
+        f"Global sync will run every *{hours}* hours.\n"
+        f"Schedule ID: `{schedule_id}`",
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
+
+
+async def on_admin_sync_set_once(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Start the one-time schedule flow."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Cancel", callback_data="admin:broadcast_cancel")]]
+    )
+    await query.edit_message_text(
+        "📅 *Set One-Time Sync*\n\n"
+        "Enter the date and time in Algeria timezone:\n"
+        "`YYYY-MM-DD HH:MM`\n\n"
+        "Example: `2026-05-13 08:00`",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return AWAIT_SYNC_DATETIME
+
+
+async def on_admin_sync_datetime_received(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Process the datetime input and create the one-time schedule."""
+    if not is_admin(update):
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg or not msg.text:
+        return AWAIT_SYNC_DATETIME
+
+    try:
+        dt = datetime.strptime(msg.text.strip(), "%Y-%m-%d %H:%M")
+        dt = dt.replace(tzinfo=ZoneInfo("Africa/Algiers"))
+        if dt <= datetime.now(ZoneInfo("Africa/Algiers")):
+            raise ValueError("Date is in the past")
+    except ValueError as e:
+        await msg.reply_text(
+            f"❌ *Invalid Input*\n\n{e}\n\nPlease use format: `YYYY-MM-DD HH:MM`",
+            parse_mode="Markdown",
+        )
+        return AWAIT_SYNC_DATETIME
+
+    db_path = context.application.bot_data.get("db_path", "")
+    run_at_iso = dt.isoformat()
+    schedule_id = await db_mod.save_sync_schedule(db_path, "once", run_at=run_at_iso)
+
+    # Add to running scheduler
+    from .scheduler import add_sync_job
+    add_sync_job(context.application, schedule_id, "once", run_at=run_at_iso)
+
+    await msg.reply_text(
+        f"✅ *One-Time Sync Scheduled*\n\n"
+        f"Global sync will run at: `{msg.text.strip()}`\n"
+        f"Schedule ID: `{schedule_id}`",
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
+
+
+async def on_admin_sync_clear_all(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Clear all sync schedules."""
+    query = update.callback_query
+    if not query:
+        return
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    db_path = context.application.bot_data.get("db_path", "")
+    count = await db_mod.clear_all_sync_schedules(db_path)
+
+    # Remove all sync jobs from running scheduler
+    from .scheduler import remove_all_sync_jobs
+    remove_all_sync_jobs(context.application)
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data="admin:sync_schedule_menu")]]
+    )
+    await query.edit_message_text(
+        f"✅ *All Schedules Cleared*\n\nRemoved {count} schedule(s).",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+def build_sync_schedule_handler() -> ConversationHandler:
+    """Build the ConversationHandler for sync schedule management."""
+    return ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(on_admin_sync_set_interval, pattern=r"^admin:sync_set_interval$"),
+            CallbackQueryHandler(on_admin_sync_set_once, pattern=r"^admin:sync_set_once$"),
+        ],
+        states={
+            AWAIT_SYNC_INTERVAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_sync_interval_received),
+            ],
+            AWAIT_SYNC_DATETIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_sync_datetime_received),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(on_admin_proxy_cancel, pattern=r"^admin:broadcast_cancel$"),
+        ],
+        per_message=False,
+    )

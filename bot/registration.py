@@ -124,9 +124,23 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Entry: /register command — start the forced registration flow."""
     if await check_restricted(update, context):
         return ConversationHandler.END
+    
+    # Quota-aware access control: check if any wilayas are open
+    last_known = context.application.bot_data.get("last_known", {})
+    any_open = any(s.available for s in last_known.values())
+    lang = await get_lang(context, update.effective_user.id)
+    
+    if not any_open:
+        await update.effective_message.reply_text(
+            f"{t(lang, '⚠️ *No wilayas are currently available.*')}\n\n"
+            f"{t(lang, 'Manual registration is only possible when a quota is open in at least one wilaya.')}\n\n"
+            f"{t(lang, '💡 *Reminder:* You can add a registration profile via /addprofile. This allows the bot to monitor quotas and automatically register you the instant they open for your wilaya!')}",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
     # Reset any previous state
     context.user_data["reg"] = {}
-    lang = await get_lang(context, update.effective_user.id)
     await update.effective_message.reply_text(t(lang, "📋 *Forced Registration*\n\nI'll guide you through the registration process step by step.\n\nStep 1/10 — Enter your *NIN* (National Identification Number).\nIt must be exactly *18 digits*."), parse_mode="Markdown")
     return ASK_NIN
 
@@ -239,7 +253,8 @@ async def on_wilaya_selected(
         lang = await get_lang(context, update.effective_user.id)
         await query.edit_message_text(
             f"{t(lang, '⚠️ *Quota is not active for this wilaya.*')}\n\n"
-            f"{t(lang, 'Manual registration only works when the quota is open. Please wait for a notification or use auto-registration profiles to snatch it automatically!')}",
+            f"{t(lang, 'Manual registration only works when the quota is open.')}\n\n"
+            f"{t(lang, '💡 *Reminder:* You can add a registration profile via /addprofile. This allows the bot to monitor quotas and automatically register you the instant they open for your wilaya!')}",
             parse_mode="Markdown"
         )
         return ConversationHandler.END

@@ -11,7 +11,9 @@ warnings.filterwarnings("ignore", message=r".*per_message.*")
 from dotenv import load_dotenv
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters, ContextTypes
-from telegram.error import BadRequest, Forbidden, NetworkError, TelegramError, TimedOut
+import time
+from telegram.error import BadRequest, Conflict, Forbidden, NetworkError, TelegramError, TimedOut
+
 from telegram.request import HTTPXRequest
 
 from .admin import (
@@ -23,7 +25,9 @@ from .admin import (
     on_admin_notify_invalid_nins, on_admin_sync_orders, on_admin_inbox_mute_confirm,
     on_admin_inbox_change_interval, on_admin_inbox_settings, on_admin_inbox_unmute,
     on_admin_inbox_clear, on_admin_users_submenu, on_admin_profiles_submenu,
-    on_admin_infra_submenu, on_admin_inbox_submenu
+    on_admin_infra_submenu, on_admin_inbox_submenu,
+    on_admin_global_sync, on_admin_sync_schedule_menu, on_admin_sync_clear_all,
+    build_sync_schedule_handler,
 )
 
 from .api_client import QuotaApiClient
@@ -49,6 +53,8 @@ from .logging_handler import AdminInboxHandler
 
 # Global reference to the inbox handler to update it later
 _inbox_handler: AdminInboxHandler | None = None
+_last_conflict_notify_time: float = 0
+
 
 
 def _configure_logging() -> None:
@@ -217,6 +223,33 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log the error and send a telegram message to notify the developer."""
     logger = logging.getLogger(__name__)
 
+    # 1. Handle Bot Token Conflict (409)
+    if isinstance(context.error, Conflict):
+        logger.critical("CRITICAL: Bot token conflict detected! Another instance is running.")
+        global _last_conflict_notify_time
+        now = time.time()
+        # Cooldown: Notify at most once every 30 minutes to avoid spamming
+        if now - _last_conflict_notify_time > 1800:
+            _last_conflict_notify_time = now
+            from .admin import ADMIN_TELEGRAM_ID
+            if ADMIN_TELEGRAM_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=ADMIN_TELEGRAM_ID,
+                        text=(
+                            "🚨 *CRITICAL: Bot Token Conflict Detected*\n\n"
+                            "Another instance of the bot is currently running with the same token. "
+                            "This instance cannot receive updates while the other one is active.\n\n"
+                            "⚠️ *Possible cause:* Ghost Docker container or another process.\n"
+                            "✅ *Action taken:* Admin notified. This instance will keep trying, but you should "
+                            "check your server for duplicate processes."
+                        ),
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    logger.exception("Failed to send conflict notification to admin")
+        return
+
     # Ignore "Message is not modified" errors - these are harmless and usually
     # caused by double-clicks on inline buttons.
     if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
@@ -234,6 +267,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Log other errors
     logger.error("Exception while handling an update:", exc_info=context.error)
+
 
 
 def main() -> None:
@@ -268,6 +302,7 @@ def main() -> None:
 
     # Conversation handlers (must be added first for priority)
     app.add_handler(build_admin_broadcast_handler())
+    app.add_handler(build_sync_schedule_handler())
     app.add_handler(build_registration_handler())
     app.add_handler(build_addprofile_handler())
     app.add_handler(build_verifyotp_handler())
@@ -320,6 +355,9 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_profiles_submenu, pattern=r"^admin:profiles_submenu$"))
     app.add_handler(CallbackQueryHandler(on_admin_infra_submenu, pattern=r"^admin:infra_submenu$"))
     app.add_handler(CallbackQueryHandler(on_admin_inbox_submenu, pattern=r"^admin:inbox_submenu$"))
+    app.add_handler(CallbackQueryHandler(on_admin_global_sync, pattern=r"^admin:global_sync$"))
+    app.add_handler(CallbackQueryHandler(on_admin_sync_schedule_menu, pattern=r"^admin:sync_schedule_menu$"))
+    app.add_handler(CallbackQueryHandler(on_admin_sync_clear_all, pattern=r"^admin:sync_clear_all$"))
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(on_wilaya_selected, pattern=r"^wilaya:"))

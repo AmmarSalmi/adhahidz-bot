@@ -54,6 +54,7 @@ class Profile:
     status: str
     is_valid: int
     created_at: str
+    is_synced: int = 0
 
 
 def _row_to_profile(row: tuple) -> Profile:
@@ -75,12 +76,13 @@ def _row_to_profile(row: tuple) -> Profile:
         status=str(row[14]),
         is_valid=int(row[15]),
         created_at=str(row[16]),
+        is_synced=int(row[17]) if len(row) > 17 else 0,
     )
 
 
 _SELECT_COLS = (
     "id, user_id, priority, name, nin, cnibe, phone, password, "
-    "wilaya_id, wilaya_name, commune_code, commune_name, email, payment_method, status, is_valid, created_at"
+    "wilaya_id, wilaya_name, commune_code, commune_name, email, payment_method, status, is_valid, created_at, is_synced"
 )
 
 
@@ -115,6 +117,7 @@ async def init_profiles_table(db_path: str) -> None:
             "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE profiles ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'CASH';",
             "ALTER TABLE profiles ADD COLUMN is_valid INTEGER NOT NULL DEFAULT 1;",
+            "ALTER TABLE profiles ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0;",
         ]:
             try:
                 await db.execute(migration)
@@ -212,6 +215,10 @@ async def update_profile_field(
     if field not in allowed_fields:
         raise ValueError(f"Cannot update field: {field}")
 
+    # Fields that affect registration validity — reset sync state so
+    # Global Sync re-evaluates this profile with the updated data.
+    _SYNC_RESET_FIELDS = {"nin", "password"}
+
     async def _op():
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA busy_timeout=3000;")
@@ -219,6 +226,11 @@ async def update_profile_field(
                 f"UPDATE profiles SET {field}=? WHERE id=? AND user_id=?",
                 (value, profile_id, user_id),
             )
+            if field in _SYNC_RESET_FIELDS and cur.rowcount > 0:
+                await db.execute(
+                    "UPDATE profiles SET is_synced=0, is_valid=1 WHERE id=? AND user_id=?",
+                    (profile_id, user_id),
+                )
             await db.commit()
             return cur.rowcount > 0
 
@@ -430,3 +442,62 @@ async def reset_registering_profiles(db_path: str) -> int:
             return cur.rowcount
 
     return await _with_retries(_op)
+
+
+async def get_unsynced_profiles(db_path: str) -> list[Profile]:
+    """Return all profiles where is_synced=0, ordered by user_id then priority."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            f"SELECT {_SELECT_COLS} FROM profiles WHERE is_synced=0 ORDER BY user_id, priority"
+        ) as cur:
+            rows = await cur.fetchall()
+            return [_row_to_profile(r) for r in rows]
+
+
+async def get_total_profile_count(db_path: str) -> int:
+    """Return total number of profiles in the database."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute("SELECT COUNT(*) FROM profiles") as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def mark_profile_synced(db_path: str, profile_id: int) -> None:
+    """Mark a profile as synced (is_synced=1)."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute("UPDATE profiles SET is_synced=1 WHERE id=?", (profile_id,))
+            await db.commit()
+
+    await _with_retries(_op)
+
+
+async def reset_profile_sync_on_edit(db_path: str, profile_id: int) -> None:
+    """Reset is_synced=0 and is_valid=1 after user edits NIN or password."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute(
+                "UPDATE profiles SET is_synced=0, is_valid=1 WHERE id=?",
+                (profile_id,),
+            )
+            await db.commit()
+
+    await _with_retries(_op)
+
+
+async def set_profile_invalid(db_path: str, profile_id: int) -> None:
+    """Mark profile as invalid (is_valid=0) and synced (is_synced=1)."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            await db.execute(
+                "UPDATE profiles SET is_valid=0, is_synced=1 WHERE id=?",
+                (profile_id,),
+            )
+            await db.commit()
+
+    await _with_retries(_op)

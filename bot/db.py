@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS global_settings (
   key         TEXT    PRIMARY KEY,
   value       TEXT
 );
+CREATE TABLE IF NOT EXISTS sync_schedules (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  schedule_type    TEXT    NOT NULL,
+  interval_seconds INTEGER,
+  run_at           TEXT,
+  active           INTEGER NOT NULL DEFAULT 1,
+  created_at       TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 """
 
 
@@ -112,6 +120,7 @@ async def init_db(db_path: str) -> None:
             "ALTER TABLE profiles ADD COLUMN name TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE profiles ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'CASH';",
             "ALTER TABLE admin_inbox ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE profiles ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0;",
         ]:
             try:
                 await db.execute(migration)
@@ -542,6 +551,81 @@ async def hide_all_inbox_entries(db_path: str) -> int:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA busy_timeout=3000;")
             cur = await db.execute("UPDATE admin_inbox SET is_hidden = 1 WHERE is_hidden = 0")
+            await db.commit()
+            return cur.rowcount
+
+    return await _with_retries(_op)
+
+
+# ---------------------------------------------------------------------------
+# Sync schedule persistence
+# ---------------------------------------------------------------------------
+
+async def save_sync_schedule(db_path: str, schedule_type: str, interval_seconds: int | None = None, run_at: str | None = None) -> int:
+    """Insert a new sync schedule and return its id."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute(
+                "INSERT INTO sync_schedules (schedule_type, interval_seconds, run_at) VALUES (?, ?, ?)",
+                (schedule_type, interval_seconds, run_at),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+    return await _with_retries(_op)
+
+
+async def get_active_sync_schedules(db_path: str) -> list[dict]:
+    """Return all active sync schedules."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+        async with db.execute(
+            "SELECT id, schedule_type, interval_seconds, run_at, created_at FROM sync_schedules WHERE active=1"
+        ) as cur:
+            rows = await cur.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "schedule_type": r[1],
+                    "interval_seconds": r[2],
+                    "run_at": r[3],
+                    "created_at": r[4],
+                }
+                for r in rows
+            ]
+
+
+async def delete_sync_schedule(db_path: str, schedule_id: int) -> bool:
+    """Delete a sync schedule. Returns True if deleted."""
+    async def _op() -> bool:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute("DELETE FROM sync_schedules WHERE id=?", (schedule_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
+    return bool(await _with_retries(_op))
+
+
+async def deactivate_sync_schedule(db_path: str, schedule_id: int) -> bool:
+    """Mark a sync schedule as inactive. Returns True if updated."""
+    async def _op() -> bool:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute("UPDATE sync_schedules SET active=0 WHERE id=?", (schedule_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
+    return bool(await _with_retries(_op))
+
+
+async def clear_all_sync_schedules(db_path: str) -> int:
+    """Delete all sync schedules. Returns count deleted."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            cur = await db.execute("DELETE FROM sync_schedules")
             await db.commit()
             return cur.rowcount
 
