@@ -41,6 +41,8 @@ A **security, privacy, reliability, and optimization** review is maintained in [
 - **Inbox Maintenance Tools**: Includes a **Soft-Delete** feature to hide entries from the dashboard for a clean workspace, and a **Hard-Delete Deduplication** tool that permanently removes all redundant historical logs, keeping only the most recent example of each distinct alert.
 - **Admin Audit & Sync Suite**: Includes a comprehensive set of maintenance tools:
   - **Global Profile Synchronization**: Triggers the two-stage (Probe + Audit) cascade for all unsynced profiles with built-in concurrency throttling and 429 auto-pausing.
+  - **Admin Profile Management**: Enhanced administrative lookup tool allows searching profiles by ID to view full credentials, real-time compliance status, and sync history. Features a **Manual Sync Toggle** to instantly include/exclude specific profiles from the global audit queue.
+  - **Error Analysis Tooling**: Includes a specialized `analyze_inbox_errors.py` script for deep-dive diagnostics. Features time-range filtering, frequency analysis, and **UTC Offset support** to perfectly align database logs with Telegram notification timestamps.
   - **Automated Sync Scheduling**: Allows admins to schedule recurring global audits or one-off runs at specific dates/times. Features persistent scheduling that survives bot restarts.
   - **Order Sync Reconciliation**: Legacy tool for batch checking registered profiles against the server to find and flag missing orders.
   - **Mass Force Check**: Scans the entire database for data integrity issues with both **Standard** (notifies users) and **Silent** (audit-only) modes.

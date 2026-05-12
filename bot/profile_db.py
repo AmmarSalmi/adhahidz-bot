@@ -489,6 +489,23 @@ async def reset_profile_sync_on_edit(db_path: str, profile_id: int) -> None:
     await _with_retries(_op)
 
 
+async def toggle_profile_sync(db_path: str, profile_id: int) -> bool:
+    """Toggle is_synced status and return the new state."""
+    async def _op():
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout=3000;")
+            async with db.execute("SELECT is_synced FROM profiles WHERE id=?", (profile_id,)) as cur:
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                new_state = 0 if row[0] == 1 else 1
+                await db.execute("UPDATE profiles SET is_synced=? WHERE id=?", (new_state, profile_id))
+                await db.commit()
+                return bool(new_state)
+
+    return await _with_retries(_op)
+
+
 async def set_profile_invalid(db_path: str, profile_id: int) -> None:
     """Mark profile as invalid (is_valid=0) and synced (is_synced=1)."""
     async def _op():

@@ -877,10 +877,16 @@ async def on_admin_check_profile_received(update: Update, context: ContextTypes.
         f"💵 *Payment:* `{profile.payment_method}`\n"
         f"{status_emoji} *Status:* `{profile.status}`\n"
         f"🛡️ *Valid Check:* `{valid_str}`\n"
+        f"🔄 *Is Synced:* `{'✅ Yes' if profile.is_synced else '❌ No'}`\n"
         f"📅 *Created:* `{profile.created_at}`\n"
     )
 
-    await msg.reply_text(text, parse_mode="Markdown")
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Toggle Sync Status", callback_data=f"admin:toggle_sync:{profile.id}")],
+        [InlineKeyboardButton("⬅️ Back to Profiles", callback_data="admin:profiles_submenu")]
+    ])
+
+    await msg.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
     return ConversationHandler.END
 
 # ---------------------------------------------------------------------------
@@ -1045,6 +1051,7 @@ def build_admin_broadcast_handler() -> ConversationHandler:
             CallbackQueryHandler(on_admin_inbox_settings, pattern=r"^admin:inbox_settings$"),
             CallbackQueryHandler(on_admin_inbox_unmute, pattern=r"^admin:inbox_unmute$"),
             CallbackQueryHandler(on_admin_inbox_deduplicate, pattern=r"^admin:inbox_deduplicate$"),
+            CallbackQueryHandler(on_admin_toggle_sync, pattern=r"^admin:toggle_sync:(\d+)$"),
         ],
         states={
             AWAIT_BROADCAST_MESSAGE: [
@@ -1086,6 +1093,55 @@ def build_admin_broadcast_handler() -> ConversationHandler:
 # ---------------------------------------------------------------------------
 # Database queries for statistics
 # ---------------------------------------------------------------------------
+
+async def _gather_stats(db_path: str) -> dict:
+    """Collect all admin statistics from the database in a single connection."""
+    now = datetime.now(ZoneInfo("Africa/Algiers"))
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    week_start = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=3000;")
+
+
+async def on_admin_toggle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle the is_synced status of a profile via admin button."""
+    query = update.callback_query
+    if not query:
+        return
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return
+
+    # Pattern: admin:toggle_sync:<profile_id>
+    parts = query.data.split(":")
+    if len(parts) < 3:
+        return
+    
+    profile_id = int(parts[2])
+    db_path = context.application.bot_data.get("db_path", "")
+    
+    new_state = await profile_db.toggle_profile_sync(db_path, profile_id)
+    
+    # Update the existing message with the new status
+    text = query.message.text
+    # Replace "Is Synced: ✅ Yes" or "Is Synced: ❌ No"
+    old_status = "✅ Yes" if not new_state else "❌ No"
+    new_status = "✅ Yes" if new_state else "❌ No"
+    
+    new_text = text.replace(f"Is Synced: {old_status}", f"Is Synced: {new_status}")
+    
+    await query.edit_message_text(
+        new_text, 
+        reply_markup=query.message.reply_markup,
+        parse_mode="Markdown"
+    )
+    await query.answer(f"✅ Sync status updated to: {new_status}")
+
 
 async def _gather_stats(db_path: str) -> dict:
     """Collect all admin statistics from the database in a single connection."""
