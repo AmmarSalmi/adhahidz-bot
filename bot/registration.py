@@ -643,8 +643,9 @@ async def _submit_registration(
 
     headers = _build_headers(context)
     headers["Content-Type"] = "application/json"
-    headers["X-Captcha-Id"] = state["captchaId"]
-    headers["X-Captcha-Answer"] = state["captchaAnswer"]
+    headers["X-Captcha-Id"] = str(state["captchaId"])
+    # Ensure header values are ASCII to avoid UnicodeEncodeError
+    headers["X-Captcha-Answer"] = str(state["captchaAnswer"]).encode("ascii", "ignore").decode("ascii")
 
     client = _get_http_client(context)
 
@@ -750,8 +751,9 @@ async def _verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     headers = _build_headers(context)
     headers["Content-Type"] = "application/json"
-    headers["X-Captcha-Id"] = state["captchaId"]
-    headers["X-Captcha-Answer"] = state["captchaAnswer"]
+    headers["X-Captcha-Id"] = str(state["captchaId"])
+    # Ensure header values are ASCII to avoid UnicodeEncodeError
+    headers["X-Captcha-Answer"] = str(state["captchaAnswer"]).encode("ascii", "ignore").decode("ascii")
 
     client = _get_http_client(context)
 

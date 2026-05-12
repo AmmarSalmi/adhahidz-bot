@@ -76,6 +76,8 @@ async def _fetch_and_solve_captcha(
         b64 = image_uri.split(",", 1)[1] if "," in image_uri else image_uri
         image_bytes = base64.b64decode(b64)
         solved_text = await used_solver.solve(image_bytes)
+        # Sanitize to ASCII for headers
+        solved_text = str(solved_text).encode("ascii", "ignore").decode("ascii")
         logger.info("CAPTCHA solved by %s: id=%s answer=%s", used_solver.name, captcha_id, solved_text)
         return captcha_id, solved_text, image_bytes
     except Exception as exc:
@@ -150,7 +152,11 @@ async def _try_submit_profile(
             continue
 
         captcha_id, answer, _ = solved
-        req_headers = {**base_headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
+        req_headers = {
+            **base_headers, 
+            "X-Captcha-Id": str(captcha_id), 
+            "X-Captcha-Answer": str(answer).encode("ascii", "ignore").decode("ascii")
+        }
 
         try:
             resp = await client.post("/api/v2/citizens/register", json=body, headers=req_headers)
@@ -244,8 +250,8 @@ async def _try_login_and_order(
         captcha_id, answer, _ = solved
         login_headers = {
             **base_headers,
-            "X-Captcha-Id": captcha_id,
-            "X-Captcha-Answer": answer,
+            "X-Captcha-Id": str(captcha_id),
+            "X-Captcha-Answer": str(answer).encode("ascii", "ignore").decode("ascii"),
         }
         login_body = {
             "nin": profile.nin,
@@ -1002,8 +1008,8 @@ async def manual_captcha_reply_handler(update: Update, context: ContextTypes.DEF
     client = _get_http_client(context)
     headers = _build_headers(context)
     headers["Content-Type"] = "application/json"
-    headers["X-Captcha-Id"] = captcha_id
-    headers["X-Captcha-Answer"] = answer
+    headers["X-Captcha-Id"] = str(captcha_id)
+    headers["X-Captcha-Answer"] = str(answer).encode("ascii", "ignore").decode("ascii")
 
     try:
         resp = await client.post("/api/v2/citizens/register", json=body, headers=headers)
@@ -1308,7 +1314,11 @@ async def verifyotp_handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             continue
 
         captcha_id, answer, _ = solved
-        req_headers = {**headers, "X-Captcha-Id": captcha_id, "X-Captcha-Answer": answer}
+        req_headers = {
+            **headers, 
+            "X-Captcha-Id": str(captcha_id), 
+            "X-Captcha-Answer": str(answer).encode("ascii", "ignore").decode("ascii")
+        }
         body = {"nin": profile.nin, "otp": otp}
 
         try:
@@ -1371,8 +1381,8 @@ async def verifyotp_captcha_answer(update: Update, context: ContextTypes.DEFAULT
     client = _get_http_client(context)
     headers = _build_headers(context)
     headers["Content-Type"] = "application/json"
-    headers["X-Captcha-Id"] = captcha_id
-    headers["X-Captcha-Answer"] = answer
+    headers["X-Captcha-Id"] = str(captcha_id)
+    headers["X-Captcha-Answer"] = str(answer).encode("ascii", "ignore").decode("ascii")
 
     try:
         resp = await client.post(

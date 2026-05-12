@@ -9,3 +9,5 @@ debug_query.py
 .agent/
 scratch/
 debug_*
+*.db
+*.txt
