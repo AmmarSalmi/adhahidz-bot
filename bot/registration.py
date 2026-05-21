@@ -515,8 +515,8 @@ def _validate_password(pw: str) -> list[str]:
         errors.append("Must contain at least one lowercase letter (a-z)")
     if not any(c.isupper() for c in pw):
         errors.append("Must contain at least one uppercase letter (A-Z)")
-    if not any(c in "!@#$%^&*()_+-=?" for c in pw):
-        errors.append("Must contain at least one special character (!@#$%^&*()_+-=?)")
+    if not any(c in "!@#$%^&*()_+-=?/" for c in pw):
+        errors.append("Must contain at least one special character (!@#$%^&*()_+-=?/)")
     if "." in pw:
         errors.append("The dot (.) character is not allowed in passwords")
     if any(c.isspace() for c in pw):
@@ -623,8 +623,8 @@ def get_profile_validation_errors(p: Any, lang: str) -> list[str]:
         errors.append(t(lang, "Password must contain at least one lowercase letter (a-z)."))
     if not any(c.isupper() for c in password):
         errors.append(t(lang, "Password must contain at least one uppercase letter (A-Z)."))
-    if not any(c in "!@#$%^&*()_+-=?" for c in password):
-        errors.append(t(lang, "Password must contain at least one special character (!@#$%^&*()_+-=?)."))
+    if not any(c in "!@#$%^&*()_+-=?/" for c in password):
+        errors.append(t(lang, "Password must contain at least one special character (!@#$%^&*()_+-=?/)."))
     if "." in password:
         errors.append(t(lang, "The dot (.) character is not allowed in passwords."))
     if any(c.isspace() for c in password):
