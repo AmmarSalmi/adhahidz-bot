@@ -11,6 +11,8 @@ scratch/
 debug_*
 *.db
 *.txt
+canary-strategy/
+
 
 # Python
 */__pycache__/

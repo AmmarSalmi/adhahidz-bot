@@ -245,7 +245,10 @@ async def _probe_nin(api_client, profile: profile_db.Profile, app) -> tuple[str,
             return "registered", "Active account (needs audit)"
 
         # 404 or other 4xx usually means not registered
-        if resp.status_code == 404 or any(kw in error_msg.lower() for kw in ("not found", "aucune inscription", "no registration")):
+        # "Aucun OTP d'inscription actif trouvé" = no active registration OTP → never registered
+        if resp.status_code == 404 or any(kw in error_msg.lower() for kw in (
+            "not found", "aucune inscription", "no registration", "aucun otp"
+        )):
             await profile_db.set_profile_status(db_path, profile.id, "pending")
             await profile_db.mark_profile_synced(db_path, profile.id)
             return "pending", "Profile not found on server"
