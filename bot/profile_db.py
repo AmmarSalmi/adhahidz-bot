@@ -275,7 +275,7 @@ async def get_pending_profiles_for_wilaya(
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles "
-            "WHERE CAST(wilaya_id AS TEXT)=? AND status='pending' AND is_valid=1 "
+            "WHERE wilaya_id = CAST(? AS INTEGER) AND status='pending' AND is_valid=1 "
             "ORDER BY priority",
             (str(wilaya_code),),
         ) as cur:
@@ -294,7 +294,7 @@ async def get_profiles_for_wilaya_by_statuses(
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles "
-            f"WHERE CAST(wilaya_id AS TEXT)=? AND status IN ({placeholders}) "
+            f"WHERE wilaya_id = CAST(? AS INTEGER) AND status IN ({placeholders}) "
             "ORDER BY priority",
             (str(wilaya_code), *statuses),
         ) as cur:
@@ -334,11 +334,14 @@ async def get_all_profiles_grouped_by_user(db_path: str) -> dict[int, list[Profi
 
 
 async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
-    """Return distinct wilaya codes that have at least one pending, registered, or pre-registered profile."""
+    """Return distinct wilaya codes that have at least one pending, registered, or pre-registered profile.
+
+    Returns zero-padded codes (e.g. '01', '09', '46') to match the API format.
+    """
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
-            "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles "
+            "SELECT DISTINCT printf('%02d', wilaya_id) FROM profiles "
             "WHERE status IN ('pending', 'registered', 'pre-registered') AND is_valid=1"
         ) as cur:
             rows = await cur.fetchall()
@@ -346,11 +349,14 @@ async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
 
 
 async def get_user_profile_wilayas(db_path: str, user_id: int) -> list[str]:
-    """Return distinct wilaya codes for a specific user's active profiles."""
+    """Return distinct wilaya codes for a specific user's active profiles.
+
+    Returns zero-padded codes (e.g. '01', '09', '46') to match the API format.
+    """
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout=3000;")
         async with db.execute(
-            "SELECT DISTINCT CAST(wilaya_id AS TEXT) FROM profiles "
+            "SELECT DISTINCT printf('%02d', wilaya_id) FROM profiles "
             "WHERE user_id=? AND status IN ('pending', 'registered', 'pre-registered') AND is_valid=1",
             (user_id,),
         ) as cur:
@@ -402,12 +408,14 @@ async def get_actionable_profiles_prioritized(
     # If priority_user_id is provided, those profiles come first.
     
     order_by_clause = "us.first_profile_at ASC, p.priority ASC"
-    params = [str(wilaya_code), *statuses]
+    # Build params in SQL positional order: WHERE params first, then ORDER BY params.
+    params: list = [str(wilaya_code), *statuses]
     
     if priority_user_id is not None:
         # CASE WHEN p.user_id = ? THEN 0 ELSE 1 END puts the priority user at the top (0 < 1)
         order_by_clause = f"CASE WHEN p.user_id = ? THEN 0 ELSE 1 END, {order_by_clause}"
-        params.insert(0, priority_user_id)
+        # IMPORTANT: append (not insert!) because ORDER BY params bind AFTER WHERE params.
+        params.append(priority_user_id)
 
     query = f"""
     WITH UserSeniority AS (
@@ -420,7 +428,7 @@ async def get_actionable_profiles_prioritized(
            p.payment_method, p.status, p.is_valid, p.created_at
     FROM profiles p
     JOIN UserSeniority us ON p.user_id = us.user_id
-    WHERE CAST(p.wilaya_id AS TEXT) = ? AND p.status IN ({placeholders}) AND p.is_valid = 1
+    WHERE p.wilaya_id = CAST(? AS INTEGER) AND p.status IN ({placeholders}) AND p.is_valid = 1
     ORDER BY {order_by_clause}
     """
     
