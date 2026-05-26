@@ -402,6 +402,10 @@ async def auto_submit_profiles(app, profiles: list[profile_db.Profile]) -> None:
       - registered  → login + order flow
       - pre-registered / ordered → skipped (handled separately)
     """
+    if not app.bot_data.get("autoreg_enabled", True):
+        logger.info("Auto-registration is disabled globally. Skipping submission.")
+        return
+
     db_path: str = app.bot_data["db_path"]
     api_client = app.bot_data.get("api_client")
     if not api_client:
@@ -477,6 +481,7 @@ async def _nudge_preregistered_profiles(
     This is fire-and-forget — we resend the OTP and tell the user to verify,
     but we never block waiting for their response.
     """
+    db_path: str = app.bot_data["db_path"]
     sem = app.bot_data["concurrency_semaphore"]
     nudge_history = app.bot_data.setdefault("nudge_history", {}) # profile_id -> timestamp
     now = time.time()

@@ -27,7 +27,7 @@ from .admin import (
     on_admin_inbox_clear, on_admin_users_submenu, on_admin_profiles_submenu,
     on_admin_infra_submenu, on_admin_inbox_submenu,
     on_admin_global_sync, on_admin_sync_schedule_menu, on_admin_sync_clear_all,
-    build_sync_schedule_handler,
+    build_sync_schedule_handler, on_admin_toggle_autoreg,
 )
 
 from .api_client import QuotaApiClient
@@ -137,6 +137,7 @@ async def _post_init(app: Application) -> None:
     app.bot_data["proxy_wilaya"] = os.getenv("PROXY_WILAYA", "false").lower() == "true"
     app.bot_data["proxy_autoreg"] = os.getenv("PROXY_AUTOREG", "false").lower() == "true"
     app.bot_data["proxy_checkprof"] = os.getenv("PROXY_CHECKPROF", "false").lower() == "true"
+    app.bot_data["autoreg_enabled"] = os.getenv("AUTOREG_ENABLED", "true").lower() == "true"
 
     try:
         app.bot_data["wilayas"] = await _load_wilayas(api, db_path)
@@ -354,9 +355,10 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_admin_sync_orders, pattern=r"^admin:sync_orders$"))
     app.add_handler(CallbackQueryHandler(on_admin_users_submenu, pattern=r"^admin:users_submenu$"))
     app.add_handler(CallbackQueryHandler(on_admin_profiles_submenu, pattern=r"^admin:profiles_submenu$"))
+    app.add_handler(CallbackQueryHandler(on_admin_toggle_autoreg, pattern=r"^admin:toggle_autoreg$"))
     app.add_handler(CallbackQueryHandler(on_admin_infra_submenu, pattern=r"^admin:infra_submenu$"))
     app.add_handler(CallbackQueryHandler(on_admin_inbox_submenu, pattern=r"^admin:inbox_submenu$"))
-    app.add_handler(CallbackQueryHandler(on_admin_global_sync, pattern=r"^admin:global_sync$"))
+    app.add_handler(CallbackQueryHandler(on_admin_global_sync, pattern=r"^admin:global_sync(_force)?$"))
     app.add_handler(CallbackQueryHandler(on_admin_sync_schedule_menu, pattern=r"^admin:sync_schedule_menu$"))
     app.add_handler(CallbackQueryHandler(on_admin_sync_clear_all, pattern=r"^admin:sync_clear_all$"))
 

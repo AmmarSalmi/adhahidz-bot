@@ -86,31 +86,12 @@ _SELECT_COLS = (
 )
 
 
-def _is_locked_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return "database is locked" in msg or "locked" == msg.strip()
-
-
-async def _with_retries(fn, *, attempts: int = 3, base_delay_s: float = 0.2):
-    last: Exception | None = None
-    for i in range(attempts):
-        try:
-            return await fn()
-        except aiosqlite.OperationalError as e:
-            last = e
-            if not _is_locked_error(e) or i == attempts - 1:
-                raise
-            delay = base_delay_s * (2 ** i)
-            logger.warning("SQLite locked; retrying in %.2fs", delay)
-            await asyncio.sleep(delay)
-    if last:
-        raise last
+from .db import _connect, _with_retries
 
 
 async def init_profiles_table(db_path: str) -> None:
     """Create the profiles table if it doesn't exist."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         await db.execute(CREATE_PROFILES_TABLE_SQL)
         # Migrations for columns added after initial schema
         for migration in [
@@ -129,8 +110,7 @@ async def init_profiles_table(db_path: str) -> None:
 async def add_profile(db_path: str, user_id: int, data: dict[str, Any]) -> int:
     """Insert a new profile and return its id."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             # Set priority to max+1 for this user
             async with db.execute(
                 "SELECT COALESCE(MAX(priority), -1) + 1 FROM profiles WHERE user_id=?",
@@ -169,8 +149,7 @@ async def add_profile(db_path: str, user_id: int, data: dict[str, Any]) -> int:
 
 async def get_profiles(db_path: str, user_id: int) -> list[Profile]:
     """Return all profiles for a user, sorted by priority."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles WHERE user_id=? ORDER BY priority",
             (user_id,),
@@ -181,8 +160,7 @@ async def get_profiles(db_path: str, user_id: int) -> list[Profile]:
 
 async def get_profile(db_path: str, profile_id: int, user_id: int) -> Profile | None:
     """Get a single profile by id (scoped to user)."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles WHERE id=? AND user_id=?",
             (profile_id, user_id),
@@ -193,8 +171,7 @@ async def get_profile(db_path: str, profile_id: int, user_id: int) -> Profile | 
 
 async def get_profile_by_id_admin(db_path: str, profile_id: int) -> Profile | None:
     """Get a single profile by id (admin use, no user restriction)."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles WHERE id=?",
             (profile_id,),
@@ -220,8 +197,7 @@ async def update_profile_field(
     _SYNC_RESET_FIELDS = {"nin", "password"}
 
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute(
                 f"UPDATE profiles SET {field}=? WHERE id=? AND user_id=?",
                 (value, profile_id, user_id),
@@ -240,8 +216,7 @@ async def update_profile_field(
 async def delete_profile(db_path: str, profile_id: int, user_id: int) -> bool:
     """Delete a profile. Returns True if deleted."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute(
                 "DELETE FROM profiles WHERE id=? AND user_id=?",
                 (profile_id, user_id),
@@ -255,8 +230,7 @@ async def delete_profile(db_path: str, profile_id: int, user_id: int) -> bool:
 async def reorder_profiles(db_path: str, user_id: int, id_order: list[int]) -> None:
     """Set new priority order. id_order[0] gets priority 0, etc."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             for priority, profile_id in enumerate(id_order):
                 await db.execute(
                     "UPDATE profiles SET priority=? WHERE id=? AND user_id=?",
@@ -271,8 +245,7 @@ async def get_pending_profiles_for_wilaya(
     db_path: str, wilaya_code: str
 ) -> list[Profile]:
     """Find all pending profiles matching a wilaya code, ordered by priority."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles "
             "WHERE wilaya_id = CAST(? AS INTEGER) AND status='pending' AND is_valid=1 "
@@ -290,8 +263,7 @@ async def get_profiles_for_wilaya_by_statuses(
     if not statuses:
         return []
     placeholders = ",".join("?" for _ in statuses)
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles "
             f"WHERE wilaya_id = CAST(? AS INTEGER) AND status IN ({placeholders}) "
@@ -306,8 +278,7 @@ async def get_all_profiles_by_status(
     db_path: str, status: str
 ) -> list[Profile]:
     """Return all profiles with the given status across all users, ordered by user_id then priority."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles WHERE status=? ORDER BY user_id, priority",
             (status,),
@@ -318,8 +289,7 @@ async def get_all_profiles_by_status(
 
 async def get_all_profiles_grouped_by_user(db_path: str) -> dict[int, list[Profile]]:
     """Return all profiles grouped by user_id, each list sorted by priority."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles ORDER BY user_id, priority"
         ) as cur:
@@ -338,8 +308,7 @@ async def get_distinct_profile_wilayas(db_path: str) -> list[str]:
 
     Returns zero-padded codes (e.g. '01', '09', '46') to match the API format.
     """
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT DISTINCT printf('%02d', wilaya_id) FROM profiles "
             "WHERE status IN ('pending', 'registered', 'pre-registered') AND is_valid=1"
@@ -353,8 +322,7 @@ async def get_user_profile_wilayas(db_path: str, user_id: int) -> list[str]:
 
     Returns zero-padded codes (e.g. '01', '09', '46') to match the API format.
     """
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT DISTINCT printf('%02d', wilaya_id) FROM profiles "
             "WHERE user_id=? AND status IN ('pending', 'registered', 'pre-registered') AND is_valid=1",
@@ -367,8 +335,7 @@ async def get_user_profile_wilayas(db_path: str, user_id: int) -> list[str]:
 async def set_profile_status(db_path: str, profile_id: int, status: str) -> None:
     """Update profile status."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute(
                 "UPDATE profiles SET status=? WHERE id=?",
                 (status, profile_id),
@@ -382,8 +349,7 @@ async def get_profiles_by_status(
     db_path: str, user_id: int, status: str
 ) -> list[Profile]:
     """Return all profiles for a user with a given status, sorted by priority."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles WHERE user_id=? AND status=? ORDER BY priority",
             (user_id, status),
@@ -432,8 +398,7 @@ async def get_actionable_profiles_prioritized(
     ORDER BY {order_by_clause}
     """
     
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(query, tuple(params)) as cur:
             rows = await cur.fetchall()
             return [_row_to_profile(r) for r in rows]
@@ -441,8 +406,7 @@ async def get_actionable_profiles_prioritized(
 async def reset_registering_profiles(db_path: str) -> int:
     """Reset all 'registering' profiles to 'pending' at startup. Returns count."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute(
                 "UPDATE profiles SET status='pending' WHERE status='registering'"
             )
@@ -454,8 +418,7 @@ async def reset_registering_profiles(db_path: str) -> int:
 
 async def get_unsynced_profiles(db_path: str) -> list[Profile]:
     """Return all profiles where is_synced=0, ordered by user_id then priority."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             f"SELECT {_SELECT_COLS} FROM profiles WHERE is_synced=0 ORDER BY user_id, priority"
         ) as cur:
@@ -463,10 +426,19 @@ async def get_unsynced_profiles(db_path: str) -> list[Profile]:
             return [_row_to_profile(r) for r in rows]
 
 
+async def get_all_profiles(db_path: str) -> list[Profile]:
+    """Return all profiles in the database, ordered by user_id then priority."""
+    async with _connect(db_path) as db:
+        async with db.execute(
+            f"SELECT {_SELECT_COLS} FROM profiles ORDER BY user_id, priority"
+        ) as cur:
+            rows = await cur.fetchall()
+            return [_row_to_profile(r) for r in rows]
+
+
 async def get_total_profile_count(db_path: str) -> int:
     """Return total number of profiles in the database."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute("SELECT COUNT(*) FROM profiles") as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
@@ -475,8 +447,7 @@ async def get_total_profile_count(db_path: str) -> int:
 async def mark_profile_synced(db_path: str, profile_id: int) -> None:
     """Mark a profile as synced (is_synced=1)."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute("UPDATE profiles SET is_synced=1 WHERE id=?", (profile_id,))
             await db.commit()
 
@@ -486,8 +457,7 @@ async def mark_profile_synced(db_path: str, profile_id: int) -> None:
 async def reset_profile_sync_on_edit(db_path: str, profile_id: int) -> None:
     """Reset is_synced=0 and is_valid=1 after user edits NIN or password."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute(
                 "UPDATE profiles SET is_synced=0, is_valid=1 WHERE id=?",
                 (profile_id,),
@@ -500,8 +470,7 @@ async def reset_profile_sync_on_edit(db_path: str, profile_id: int) -> None:
 async def toggle_profile_sync(db_path: str, profile_id: int) -> bool:
     """Toggle is_synced status and return the new state."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             async with db.execute("SELECT is_synced FROM profiles WHERE id=?", (profile_id,)) as cur:
                 row = await cur.fetchone()
                 if not row:
@@ -517,8 +486,7 @@ async def toggle_profile_sync(db_path: str, profile_id: int) -> bool:
 async def set_profile_invalid(db_path: str, profile_id: int) -> None:
     """Mark profile as invalid (is_valid=0) and synced (is_synced=1)."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute(
                 "UPDATE profiles SET is_valid=0, is_synced=1 WHERE id=?",
                 (profile_id,),

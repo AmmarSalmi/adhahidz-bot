@@ -49,20 +49,56 @@ STAGE2_JITTER = (5.0, 10.0)
 RATE_LIMIT_PAUSE_S = 900  # 15 minutes
 
 
+def _parse_remaining_time(msg: str) -> str:
+    """Extract remaining time from the OTP resend error message."""
+    # Find all matches of numbers followed by time units (minutes, secondes, etc.) in French or English
+    pattern = r"(\d+)\s*(minute|seconde|hour|min|sec|heure)s?"
+    matches = re.findall(pattern, msg, re.IGNORECASE)
+    if matches:
+        parts = []
+        for val, unit in matches:
+            u = unit.lower()
+            if u.startswith("min"):
+                parts.append(f"{val}m")
+            elif u.startswith("sec"):
+                parts.append(f"{val}s")
+            elif u.startswith("hour") or u.startswith("heur"):
+                parts.append(f"{val}h")
+            else:
+                parts.append(f"{val} {unit}")
+        return " ".join(parts)
+
+    # Fallback: find any digits
+    digits = re.findall(r"\d+", msg)
+    if len(digits) >= 2:
+        return f"{digits[0]}m {digits[1]}s"
+    elif len(digits) == 1:
+        return f"{digits[0]}m"
+
+    return "a few minutes"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Public entry point
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def run_global_sync(app) -> dict[str, Any]:
+async def run_global_sync(app, force: bool = False) -> dict[str, Any]:
     """Run the full two-stage global sync. Returns a stats dict."""
     db_path: str = app.bot_data["db_path"]
     api_client = app.bot_data["api_client"]
     admin_id = app.bot_data.get("admin_id")
 
+    mode = "FORCE" if force else "NORMAL"
+    logger.info("=== Global Sync START (mode=%s) ===", mode)
+
     primary_solver, fallback_solver = create_solvers()
 
-    profiles = await profile_db.get_unsynced_profiles(db_path)
+    if force:
+        profiles = await profile_db.get_all_profiles(db_path)
+    else:
+        profiles = await profile_db.get_unsynced_profiles(db_path)
     total_profiles = await profile_db.get_total_profile_count(db_path)
+    logger.info("Profiles to scan: %d / %d total (mode=%s)", len(profiles), total_profiles, mode)
 
     stats = {
         "total": total_profiles,
@@ -74,7 +110,7 @@ async def run_global_sync(app) -> dict[str, Any]:
         "ordered": 0,
         "bad_password": 0,
         "errors": 0,
-        "skipped_synced": total_profiles - len(profiles),
+        "skipped_synced": 0 if force else (total_profiles - len(profiles)),
         "notifications_sent": 0,
         "rate_limit_pauses": 0,
     }
@@ -84,13 +120,15 @@ async def run_global_sync(app) -> dict[str, Any]:
 
     if admin_id:
         try:
+            sync_title = "🔄 *Force Global Sync Started*" if force else "🔄 *Global Sync Started*"
+            scan_label = "Total to scan (forced)" if force else "Unsynced (to scan)"
+            skip_msg = f"\nAlready synced (skipping): *{stats['skipped_synced']}*" if not force else ""
             await app.bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    f"🔄 *Global Sync Started*\n\n"
+                    f"{sync_title}\n\n"
                     f"Total profiles: *{total_profiles}*\n"
-                    f"Unsynced (to scan): *{len(profiles)}*\n"
-                    f"Already synced (skipping): *{stats['skipped_synced']}*"
+                    f"{scan_label}: *{len(profiles)}*{skip_msg}"
                 ),
                 parse_mode="Markdown",
             )
@@ -98,16 +136,21 @@ async def run_global_sync(app) -> dict[str, Any]:
             logger.exception("Failed to send sync start message to admin")
 
     # ── Stage 1 — Light Probe ─────────────────────────────────────────────
+    logger.info("--- Stage 1: Light Probe (%d profiles) ---", len(profiles))
     stage2_profiles: list[profile_db.Profile] = []
 
     for i in range(0, len(profiles), STAGE1_BATCH):
         batch = profiles[i:i + STAGE1_BATCH]
         for p in batch:
+            pname = p.name or f"{p.nin[:4]}…{p.nin[-4:]}"
             result, reason = await _probe_nin(api_client, p, app)
             if result == "rate_limited":
                 stats["rate_limit_pauses"] += 1
+                logger.warning("Rate limited on profile %s (%s) — pausing %ds", p.id, pname, RATE_LIMIT_PAUSE_S)
                 await asyncio.sleep(RATE_LIMIT_PAUSE_S)
                 result, reason = await _probe_nin(api_client, p, app)
+
+            logger.info("Stage1 profile %s (%s): %s — %s", p.id, pname, result, reason)
 
             if result == "pre-registered":
                 stats["pre_registered"] += 1
@@ -118,16 +161,21 @@ async def run_global_sync(app) -> dict[str, Any]:
                 stats["pending"] += 1
             else:
                 stats["errors"] += 1
-                pname = p.name or f"{p.nin[:4]}…{p.nin[-4:]}"
                 error_details.append(f"❌ *{pname}*: {reason}")
+
+        # Log batch progress
+        done = min(i + STAGE1_BATCH, len(profiles))
+        logger.info("Stage 1 progress: %d/%d profiles probed", done, len(profiles))
 
         if i + STAGE1_BATCH < len(profiles):
             await asyncio.sleep(random.uniform(*STAGE1_JITTER))
 
     # ── Stage 2 — Deep Audit ──────────────────────────────────────────────
+    logger.info("--- Stage 2: Deep Audit (%d profiles need login) ---", len(stage2_profiles))
     for i in range(0, len(stage2_profiles), STAGE2_BATCH):
         batch = stage2_profiles[i:i + STAGE2_BATCH]
         for p in batch:
+            pname = p.name or f"{p.nin[:4]}…{p.nin[-4:]}"
             result, reason = await _deep_audit(
                 api_client, p, app,
                 primary_solver=primary_solver,
@@ -135,12 +183,16 @@ async def run_global_sync(app) -> dict[str, Any]:
             )
             if result == "rate_limited":
                 stats["rate_limit_pauses"] += 1
+                logger.warning("Rate limited on profile %s (%s) — pausing %ds", p.id, pname, RATE_LIMIT_PAUSE_S)
                 await asyncio.sleep(RATE_LIMIT_PAUSE_S)
                 result, reason = await _deep_audit(
                     api_client, p, app,
                     primary_solver=primary_solver,
                     fallback_solver=fallback_solver,
                 )
+
+            logger.info("Stage2 profile %s (%s): %s — %s", p.id, pname, result, reason)
+
             if result == "ordered":
                 stats["ordered"] += 1
             elif result == "bad_password":
@@ -149,8 +201,10 @@ async def run_global_sync(app) -> dict[str, Any]:
                 stats["registered_no_order"] += 1
             else:
                 stats["errors"] += 1
-                pname = p.name or f"{p.nin[:4]}…{p.nin[-4:]}"
                 error_details.append(f"❌ *{pname}*: {reason}")
+
+        done = min(i + STAGE2_BATCH, len(stage2_profiles))
+        logger.info("Stage 2 progress: %d/%d profiles audited", done, len(stage2_profiles))
 
         if i + STAGE2_BATCH < len(stage2_profiles):
             await asyncio.sleep(random.uniform(*STAGE2_JITTER))
@@ -161,8 +215,9 @@ async def run_global_sync(app) -> dict[str, Any]:
 
     if admin_id:
         try:
+            sync_complete_title = "📊 *Force Global Sync Complete*" if force else "📊 *Global Sync Complete*"
             summary = [
-                f"📊 *Global Sync Complete*\n",
+                f"{sync_complete_title}\n",
                 f"⏱ Duration: *{elapsed_min:.1f} minutes*",
                 f"📋 Total profiles in DB: *{stats['total']}*",
                 f"🔍 Scanned this run: *{stats['scanned']}*",
@@ -189,6 +244,14 @@ async def run_global_sync(app) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to send sync summary to admin")
 
+    logger.info(
+        "=== Global Sync END (mode=%s) — scanned=%d pending=%d pre_reg=%d "
+        "registered_no_order=%d ordered=%d bad_pw=%d errors=%d "
+        "rate_pauses=%d elapsed=%.1fmin ===",
+        mode, stats["scanned"], stats["pending"], stats["pre_registered"],
+        stats["registered_no_order"], stats["ordered"], stats["bad_password"],
+        stats["errors"], stats["rate_limit_pauses"], elapsed_min,
+    )
     return stats
 
 

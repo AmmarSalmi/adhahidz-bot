@@ -88,7 +88,46 @@ def _is_locked_error(exc: Exception) -> bool:
     return "database is locked" in msg or "database table is locked" in msg or "locked" == msg.strip()
 
 
-async def _with_retries(fn, *, attempts: int = 3, base_delay_s: float = 0.2):
+_SQLITE_TIMEOUT_S = 15
+_db_lock: asyncio.Lock | None = None
+
+def _get_db_lock() -> asyncio.Lock:
+    global _db_lock
+    if _db_lock is None:
+        _db_lock = asyncio.Lock()
+    return _db_lock
+
+
+class LockedConnectionContext:
+    """Connection context manager that serializes database access using a global asyncio.Lock."""
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.conn_ctx = aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_S)
+        self.conn = None
+
+    async def __aenter__(self):
+        lock = _get_db_lock()
+        await lock.acquire()
+        try:
+            self.conn = await self.conn_ctx.__aenter__()
+            return self.conn
+        except Exception:
+            lock.release()
+            raise
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        try:
+            await self.conn_ctx.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            _get_db_lock().release()
+
+
+def _connect(db_path: str):
+    """Return a LockedConnectionContext context manager with a pre-set busy timeout and serialization lock."""
+    return LockedConnectionContext(db_path)
+
+
+async def _with_retries(fn, *, attempts: int = 8, base_delay_s: float = 0.5):
     last: Exception | None = None
     for i in range(attempts):
         try:
@@ -98,7 +137,7 @@ async def _with_retries(fn, *, attempts: int = 3, base_delay_s: float = 0.2):
             if not _is_locked_error(e) or i == attempts - 1:
                 raise
             delay = base_delay_s * (2**i)
-            logger.warning("SQLite locked; retrying in %.2fs", delay)
+            logger.warning("SQLite locked; retrying in %.2fs (attempt %d/%d)", delay, i + 1, attempts)
             await asyncio.sleep(delay)
     if last:
         raise last
@@ -108,10 +147,10 @@ async def init_db(db_path: str) -> None:
     parent = os.path.dirname(db_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("PRAGMA synchronous=NORMAL;")
-        await db.execute("PRAGMA busy_timeout=3000;")
+        await db.execute("PRAGMA busy_timeout=10000;")
         await db.executescript(CREATE_TABLE_SQL)
         # Also create the profiles table (for auto-registration)
         from .profile_db import CREATE_PROFILES_TABLE_SQL
@@ -131,8 +170,7 @@ async def init_db(db_path: str) -> None:
 
 async def set_subscription(db_path: str, user_id: int, wilaya_code: str) -> None:
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             # UPSERT: if wilaya changes, reset notified
             await db.execute(
                 """
@@ -150,8 +188,7 @@ async def set_subscription(db_path: str, user_id: int, wilaya_code: str) -> None
 
 
 async def get_subscription(db_path: str, user_id: int) -> Subscription | None:
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT user_id, Wilaya_code, notified, created_at FROM subscriptions WHERE user_id=?",
             (user_id,),
@@ -164,8 +201,7 @@ async def get_subscription(db_path: str, user_id: int) -> Subscription | None:
 
 async def delete_subscription(db_path: str, user_id: int) -> bool:
     async def _op() -> bool:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute("DELETE FROM subscriptions WHERE user_id=?", (user_id,))
             await db.commit()
             return cur.rowcount > 0
@@ -176,8 +212,7 @@ async def delete_subscription(db_path: str, user_id: int) -> bool:
 async def delete_user_data(db_path: str, user_id: int) -> None:
     """Delete all data related to a user (subscriptions, settings, profiles)."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute("DELETE FROM subscriptions WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM user_settings WHERE user_id=?", (user_id,))
             await db.execute("DELETE FROM profiles WHERE user_id=?", (user_id,))
@@ -187,8 +222,7 @@ async def delete_user_data(db_path: str, user_id: int) -> None:
 
 
 async def get_distinct_wilayas(db_path: str) -> list[str]:
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute("SELECT DISTINCT Wilaya_code FROM subscriptions") as cur:
             rows = await cur.fetchall()
             return [str(r[0]) for r in rows]
@@ -196,8 +230,7 @@ async def get_distinct_wilayas(db_path: str) -> list[str]:
 
 async def get_user_subscription_wilaya(db_path: str, user_id: int) -> str | None:
     """Return the wilaya code the user is subscribed to, or None."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT Wilaya_code FROM subscriptions WHERE user_id=?",
             (user_id,),
@@ -207,8 +240,7 @@ async def get_user_subscription_wilaya(db_path: str, user_id: int) -> str | None
 
 
 async def get_subscribers(db_path: str, wilaya_code: str) -> list[int]:
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT user_id FROM subscriptions WHERE Wilaya_code=?",
             (wilaya_code,),
@@ -218,8 +250,7 @@ async def get_subscribers(db_path: str, wilaya_code: str) -> list[int]:
 
 
 async def get_subscribers_to_notify(db_path: str, wilaya_code: str) -> list[int]:
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT user_id FROM subscriptions WHERE Wilaya_code=? AND notified=0",
             (wilaya_code,),
@@ -230,8 +261,7 @@ async def get_subscribers_to_notify(db_path: str, wilaya_code: str) -> list[int]
 
 async def get_notified_subscribers(db_path: str, wilaya_code: str) -> list[int]:
     """Return user_ids that have already been notified (notified=1) for *wilaya_code*."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT user_id FROM subscriptions WHERE Wilaya_code=? AND notified=1",
             (wilaya_code,),
@@ -245,8 +275,7 @@ async def mark_notified(db_path: str, user_ids: list[int], wilaya_code: str) -> 
         return
 
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.executemany(
                 "UPDATE subscriptions SET notified=1 WHERE user_id=? AND Wilaya_code=?",
                 [(uid, wilaya_code) for uid in user_ids],
@@ -258,8 +287,7 @@ async def mark_notified(db_path: str, user_ids: list[int], wilaya_code: str) -> 
 
 async def reset_notified_for_wilaya(db_path: str, wilaya_code: str) -> None:
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute("UPDATE subscriptions SET notified=0 WHERE Wilaya_code=?", (wilaya_code,))
             await db.commit()
 
@@ -268,8 +296,7 @@ async def reset_notified_for_wilaya(db_path: str, wilaya_code: str) -> None:
 
 async def get_user_language(db_path: str, user_id: int) -> str:
     """Return user language, defaults to 'ar'."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT language FROM user_settings WHERE user_id=?",
             (user_id,),
@@ -280,8 +307,7 @@ async def get_user_language(db_path: str, user_id: int) -> str:
 
 async def set_user_language(db_path: str, user_id: int, language: str) -> None:
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute(
                 """
                 INSERT INTO user_settings (user_id, language)
@@ -297,7 +323,7 @@ async def set_user_language(db_path: str, user_id: int, language: str) -> None:
 
 
 async def get_cached_wilayas(db_path: str) -> list[tuple[str, str]]:
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         async with db.execute("SELECT code, name FROM wilayas ORDER BY code ASC") as cur:
             rows = await cur.fetchall()
             return [(str(r[0]), str(r[1])) for r in rows]
@@ -305,7 +331,7 @@ async def get_cached_wilayas(db_path: str) -> list[tuple[str, str]]:
 
 async def save_wilayas(db_path: str, wilayas: list[dict]) -> None:
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
+        async with _connect(db_path) as db:
             await db.executemany(
                 "INSERT OR REPLACE INTO wilayas (code, name) VALUES (?, ?)",
                 [(str(w["code"]), str(w["name"])) for w in wilayas],
@@ -315,7 +341,7 @@ async def save_wilayas(db_path: str, wilayas: list[dict]) -> None:
 
 
 async def get_cached_communes(db_path: str, wilaya_code: str) -> list[dict]:
-    async with aiosqlite.connect(db_path) as db:
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT code, name, is_active FROM communes WHERE wilaya_code=? ORDER BY name ASC",
             (wilaya_code,),
@@ -326,7 +352,7 @@ async def get_cached_communes(db_path: str, wilaya_code: str) -> list[dict]:
 
 async def save_communes(db_path: str, wilaya_code: str, communes: list[dict]) -> None:
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
+        async with _connect(db_path) as db:
             await db.executemany(
                 "INSERT OR REPLACE INTO communes (code, wilaya_code, name, is_active) VALUES (?, ?, ?, ?)",
                 [(str(c["code"]), str(wilaya_code), str(c["name"]), 1 if c.get("isActive") else 0) for c in communes],
@@ -338,8 +364,7 @@ async def save_communes(db_path: str, wilaya_code: str, communes: list[dict]) ->
 async def add_quota_history_entry(db_path: str, wilaya_code: str, event_type: str) -> None:
     """Record an OPEN/CLOSE event for a wilaya."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute(
                 "INSERT INTO quota_history (wilaya_code, event_type) VALUES (?, ?)",
                 (wilaya_code, event_type),
@@ -351,8 +376,7 @@ async def add_quota_history_entry(db_path: str, wilaya_code: str, event_type: st
 
 async def get_last_open_time(db_path: str, wilaya_code: str) -> str | None:
     """Return the timestamp of the last OPEN event for a wilaya."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT timestamp FROM quota_history WHERE wilaya_code=? AND event_type='OPEN' ORDER BY id DESC LIMIT 1",
             (wilaya_code,),
@@ -364,8 +388,7 @@ async def add_inbox_entry(db_path: str, level: str, message: str, stack_trace: s
     If an identical unresolved entry exists, its timestamp is updated instead of creating a duplicate.
     """
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             # Check for existing unresolved entry with same content
             async with db.execute(
                 "SELECT id FROM admin_inbox WHERE level = ? AND message = ? AND IFNULL(stack_trace, '') = ? AND status = 'unresolved' AND is_hidden = 0 LIMIT 1",
@@ -402,8 +425,7 @@ async def get_inbox_entries(
     limit: int = 10
 ) -> list[dict]:
     """Retrieve a paginated list of inbox entries with optional filters."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         query = "SELECT id, level, message, status, created_at, resolved_at FROM admin_inbox"
         params = []
         where_clauses = ["is_hidden = 0"]
@@ -448,8 +470,7 @@ async def count_inbox_entries(
     date_filter: str | None = None
 ) -> int:
     """Count total inbox entries matching the filters."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         query = "SELECT COUNT(*) FROM admin_inbox"
         params = []
         where_clauses = ["is_hidden = 0"]
@@ -476,8 +497,7 @@ async def count_inbox_entries(
 
 async def get_inbox_entry(db_path: str, entry_id: int) -> dict | None:
     """Retrieve full details for a single inbox entry."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT id, level, message, stack_trace, status, created_at, resolved_at FROM admin_inbox WHERE id = ?",
             (entry_id,),
@@ -499,8 +519,7 @@ async def get_inbox_entry(db_path: str, entry_id: int) -> dict | None:
 async def resolve_inbox_entry(db_path: str, entry_id: int) -> bool:
     """Mark an inbox entry as resolved."""
     async def _op() -> bool:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute(
                 "UPDATE admin_inbox SET status = 'resolved', resolved_at = datetime('now', 'localtime') WHERE id = ?",
                 (entry_id,),
@@ -513,8 +532,7 @@ async def resolve_inbox_entry(db_path: str, entry_id: int) -> bool:
 
 async def get_all_user_ids(db_path: str) -> list[int]:
     """Return all unique user IDs across subscriptions, settings, and profiles."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         # Union all tables that contain user_id to find everyone the bot knows about
         query = """
         SELECT user_id FROM subscriptions
@@ -530,8 +548,7 @@ async def get_all_user_ids(db_path: str) -> list[int]:
 async def add_sync_event(db_path: str, event_type: str, profile_id: int | None = None, user_id: int | None = None, details: str | None = None) -> None:
     """Record a sync event for analytics."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute(
                 "INSERT INTO sync_history (event_type, profile_id, user_id, details) VALUES (?, ?, ?, ?)",
                 (event_type, profile_id, user_id, details),
@@ -543,8 +560,7 @@ async def add_sync_event(db_path: str, event_type: str, profile_id: int | None =
 
 async def get_global_setting(db_path: str, key: str, default: str | None = None) -> str | None:
     """Retrieve a global setting value."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute("SELECT value FROM global_settings WHERE key = ?", (key,)) as cur:
             row = await cur.fetchone()
             return str(row[0]) if row else default
@@ -553,8 +569,7 @@ async def get_global_setting(db_path: str, key: str, default: str | None = None)
 async def set_global_setting(db_path: str, key: str, value: str) -> None:
     """Update or insert a global setting."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             await db.execute(
                 "INSERT INTO global_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
@@ -567,8 +582,7 @@ async def set_global_setting(db_path: str, key: str, value: str) -> None:
 async def hide_all_inbox_entries(db_path: str) -> int:
     """Soft-delete all current inbox entries by marking them as hidden."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute("UPDATE admin_inbox SET is_hidden = 1 WHERE is_hidden = 0")
             await db.commit()
             return cur.rowcount
@@ -579,8 +593,7 @@ async def hide_all_inbox_entries(db_path: str) -> int:
 async def deduplicate_inbox(db_path: str) -> int:
     """Remove redundant entries from admin_inbox, keeping only the most recent one for each distinct message content."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             # Keep the max(id) for each unique combination of level, message, and stack_trace
             cur = await db.execute(
                 """
@@ -606,8 +619,7 @@ async def deduplicate_inbox(db_path: str) -> int:
 async def save_sync_schedule(db_path: str, schedule_type: str, interval_seconds: int | None = None, run_at: str | None = None) -> int:
     """Insert a new sync schedule and return its id."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute(
                 "INSERT INTO sync_schedules (schedule_type, interval_seconds, run_at) VALUES (?, ?, ?)",
                 (schedule_type, interval_seconds, run_at),
@@ -620,8 +632,7 @@ async def save_sync_schedule(db_path: str, schedule_type: str, interval_seconds:
 
 async def get_active_sync_schedules(db_path: str) -> list[dict]:
     """Return all active sync schedules."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with _connect(db_path) as db:
         async with db.execute(
             "SELECT id, schedule_type, interval_seconds, run_at, created_at FROM sync_schedules WHERE active=1"
         ) as cur:
@@ -641,8 +652,7 @@ async def get_active_sync_schedules(db_path: str) -> list[dict]:
 async def delete_sync_schedule(db_path: str, schedule_id: int) -> bool:
     """Delete a sync schedule. Returns True if deleted."""
     async def _op() -> bool:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute("DELETE FROM sync_schedules WHERE id=?", (schedule_id,))
             await db.commit()
             return cur.rowcount > 0
@@ -653,8 +663,7 @@ async def delete_sync_schedule(db_path: str, schedule_id: int) -> bool:
 async def deactivate_sync_schedule(db_path: str, schedule_id: int) -> bool:
     """Mark a sync schedule as inactive. Returns True if updated."""
     async def _op() -> bool:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute("UPDATE sync_schedules SET active=0 WHERE id=?", (schedule_id,))
             await db.commit()
             return cur.rowcount > 0
@@ -665,8 +674,7 @@ async def deactivate_sync_schedule(db_path: str, schedule_id: int) -> bool:
 async def clear_all_sync_schedules(db_path: str) -> int:
     """Delete all sync schedules. Returns count deleted."""
     async def _op():
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with _connect(db_path) as db:
             cur = await db.execute("DELETE FROM sync_schedules")
             await db.commit()
             return cur.rowcount

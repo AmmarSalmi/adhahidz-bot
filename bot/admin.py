@@ -289,12 +289,16 @@ def _users_submenu_keyboard(context) -> InlineKeyboardMarkup:
 
 def _profiles_submenu_keyboard(context) -> InlineKeyboardMarkup:
     """Build the profiles control submenu keyboard."""
+    autoreg = context.application.bot_data.get("autoreg_enabled", True)
+    t_autoreg = f"🤖 Auto-Registration: {'✅ ON' if autoreg else '❌ OFF'}"
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t_autoreg, callback_data="admin:toggle_autoreg")],
         [InlineKeyboardButton("🔄 Sync Active Orders", callback_data="admin:sync_orders")],
         [InlineKeyboardButton("🔍 Force Check Profiles", callback_data="admin:force_check")],
         [InlineKeyboardButton("🤫 Silent Force Check", callback_data="admin:force_check:silent")],
         [InlineKeyboardButton("🆔 Check Profile by ID", callback_data="admin:check_profile_start")],
         [InlineKeyboardButton("🌐 Global Profile Sync", callback_data="admin:global_sync")],
+        [InlineKeyboardButton("⚡ Force Global Sync (All)", callback_data="admin:global_sync_force")],
         [InlineKeyboardButton("⏰ Schedule Sync", callback_data="admin:sync_schedule_menu")],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin:back")]
     ])
@@ -389,8 +393,44 @@ async def on_admin_profiles_submenu(
         return
 
     keyboard = _profiles_submenu_keyboard(context)
+    autoreg_enabled = context.application.bot_data.get("autoreg_enabled", True)
+    status_emoji = "🤖" if autoreg_enabled else "❌"
+    status_text = "Enabled" if autoreg_enabled else "Disabled"
     await query.edit_message_text(
-        "📝 *Profiles Control*\n\nManage registration profiles and sync operations.",
+        f"📝 *Profiles Control*\n\n"
+        f"Status: {status_emoji} *Auto-Registration is {status_text}*\n\n"
+        f"Manage registration profiles and sync operations.",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def on_admin_toggle_autoreg(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Toggle auto-registration on or off."""
+    query = update.callback_query
+    if not query:
+        return
+    await safe_query_answer(query)
+
+    if not is_admin(update):
+        await query.edit_message_text("⛔ Access denied.")
+        return
+
+    current = context.application.bot_data.get("autoreg_enabled", True)
+    context.application.bot_data["autoreg_enabled"] = not current
+    new_state = not current
+
+    logger.info("Admin toggled autoreg_enabled → %s", new_state)
+
+    keyboard = _profiles_submenu_keyboard(context)
+    status_emoji = "🤖" if new_state else "❌"
+    status_text = "Enabled" if new_state else "Disabled"
+    await query.edit_message_text(
+        f"📝 *Profiles Control*\n\n"
+        f"Status: {status_emoji} *Auto-Registration is {status_text}*\n\n"
+        f"Manage registration profiles and sync operations.",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -927,11 +967,9 @@ async def on_admin_broadcast_message_received(update: Update, context: ContextTy
 
     context.user_data["broadcast_text"] = msg.text
 
-    # Count how many users we will send it to
     db_path: str = context.application.bot_data.get("db_path", "")
     try:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA busy_timeout=3000;")
+        async with db_mod._connect(db_path) as db:
             async with db.execute("SELECT COUNT(*) FROM subscriptions") as cur:
                 count = (await cur.fetchone())[0]
     except Exception:
@@ -998,8 +1036,7 @@ async def on_admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAU
         success = 0
         failed = 0
         try:
-            async with aiosqlite.connect(db_path) as db:
-                await db.execute("PRAGMA busy_timeout=3000;")
+            async with db_mod._connect(db_path) as db:
                 async with db.execute("SELECT user_id FROM subscriptions") as cur:
                     rows = await cur.fetchall()
             
@@ -1094,16 +1131,7 @@ def build_admin_broadcast_handler() -> ConversationHandler:
 # Database queries for statistics
 # ---------------------------------------------------------------------------
 
-async def _gather_stats(db_path: str) -> dict:
-    """Collect all admin statistics from the database in a single connection."""
-    now = datetime.now(ZoneInfo("Africa/Algiers"))
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    week_start = (now - timedelta(days=now.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    ).isoformat()
 
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
 
 
 async def on_admin_toggle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1151,8 +1179,7 @@ async def _gather_stats(db_path: str) -> dict:
         hour=0, minute=0, second=0, microsecond=0
     ).isoformat()
 
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout=3000;")
+    async with db_mod._connect(db_path) as db:
 
         # Total subscriptions
         async with db.execute("SELECT COUNT(*) FROM subscriptions") as cur:
@@ -1877,7 +1904,7 @@ async def _run_notify_invalid_nins_task(app, admin_id: int, db_path: str) -> Non
     
     try:
         # 1. Fetch unresolved MICLAT NOT FOUND entries
-        async with aiosqlite.connect(db_path) as db:
+        async with db_mod._connect(db_path) as db:
             query = "SELECT id, message FROM admin_inbox WHERE message LIKE '%MICLAT NOT FOUND%' AND status = 'unresolved'"
             async with db.execute(query) as cur:
                 entries = await cur.fetchall()
@@ -2156,11 +2183,12 @@ async def on_admin_global_sync(
         return
 
     context.application.bot_data["global_sync_running"] = True
+    force = (query.data == "admin:global_sync_force")
 
     async def _run():
         try:
             from .sync import run_global_sync
-            await run_global_sync(context.application)
+            await run_global_sync(context.application, force=force)
         except Exception:
             logger.exception("Global sync failed")
         finally:
@@ -2171,10 +2199,11 @@ async def on_admin_global_sync(
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("⬅️ Back", callback_data="admin:profiles_submenu")]]
     )
+    mode_str = "Force " if force else ""
     await query.edit_message_text(
-        "🔄 *Global Profile Sync Launched*\n\n"
-        "The sync is now running in the background.\n"
-        "You will receive a detailed summary when it completes.",
+        f"🔄 *{mode_str}Global Profile Sync Launched*\n\n"
+        f"The {mode_str.lower()}sync is now running in the background.\n"
+        f"You will receive a detailed summary when it completes.",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )

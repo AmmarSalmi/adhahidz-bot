@@ -110,20 +110,23 @@ async def _poll_once(
                     await db_mod.mark_notified(db_path, to_notify, wilaya_code)
 
                 # Auto-registration: trigger every poll if actionable profiles exist (Aggressive Mode)
-                try:
-                    actionable_profiles = await profile_db.get_actionable_profiles_prioritized(
-                        db_path, wilaya_code, ["pending", "registered", "pre-registered"],
-                        priority_user_id=ADMIN_TELEGRAM_ID
-                    )
-                    if actionable_profiles:
-                        logger.info(
-                            "Found %d actionable profiles for wilaya %s — triggering auto-registration",
-                            len(actionable_profiles),
-                            wilaya_code,
+                if app.bot_data.get("autoreg_enabled", True):
+                    try:
+                        actionable_profiles = await profile_db.get_actionable_profiles_prioritized(
+                            db_path, wilaya_code, ["pending", "registered", "pre-registered"],
+                            priority_user_id=ADMIN_TELEGRAM_ID
                         )
-                        asyncio.create_task(auto_submit_profiles(app, actionable_profiles))
-                except Exception:
-                    logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
+                        if actionable_profiles:
+                            logger.info(
+                                "Found %d actionable profiles for wilaya %s — triggering auto-registration",
+                                len(actionable_profiles),
+                                wilaya_code,
+                            )
+                            asyncio.create_task(auto_submit_profiles(app, actionable_profiles))
+                    except Exception:
+                        logger.exception("Auto-registration trigger failed for wilaya %s", wilaya_code)
+                else:
+                    logger.debug("Auto-registration is disabled globally, skipping trigger for wilaya %s", wilaya_code)
             else:
                 # Notify users that the quota they were alerted about is now gone.
                 previously_notified = await db_mod.get_notified_subscribers(db_path, wilaya_code)
